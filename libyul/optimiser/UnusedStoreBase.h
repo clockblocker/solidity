@@ -46,7 +46,7 @@ class Dialect;
  *
  * Prerequisite: Disambiguator, ForLoopInitRewriter.
  */
-template<typename ActiveStoreKeyType>
+template<typename ActiveStoreKeyType, typename ActiveStoreType = Statement const*>
 class UnusedStoreBase: public ASTWalker
 {
 public:
@@ -61,7 +61,7 @@ public:
 	void operator()(Continue const&) override;
 
 protected:
-	using ActiveStores = std::map<ActiveStoreKeyType, std::set<Statement const*>>;
+	using ActiveStores = std::map<ActiveStoreKeyType, std::set<ActiveStoreType>>;
 
 	/// This function is called for a loop that is nested too deep to avoid
 	/// horrible runtime and should just resolve the situation in a pragmatic
@@ -101,5 +101,4 @@ protected:
 
 enum class UnusedStoreEliminatorKey { Memory, Storage };
 extern template class UnusedStoreBase<YulString>;
-extern template class UnusedStoreBase<UnusedStoreEliminatorKey>;
 }
