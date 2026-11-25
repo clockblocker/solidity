@@ -7,6 +7,7 @@ Compiler Features:
 * Standard JSON Interface: Remove the experimental `ethdebug.resources` and `ethdebug.compilation` outputs for Yul input.
 
 Bugfixes:
+* TypeChecker: Fix ICE caused by types too large for their data location being accepted when nested in a mapping value, a dynamically-sized array, or as the base type of an array of structs.
 
 
 ### 0.8.39 (2026-11-19)
