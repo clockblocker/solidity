@@ -12,3 +12,4 @@ contract C {
     }
 }
 // ----
+// TypeError 1534: (215-228): Type too large for memory.
