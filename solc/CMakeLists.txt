@@ -5,7 +5,7 @@ set(libsolcli_sources
 )
 
 add_library(solcli ${libsolcli_sources})
-target_link_libraries(solcli PUBLIC solidity Boost::boost Boost::program_options)
+target_link_libraries(solcli PUBLIC solidity Boost::boost reflectcpp)
 
 set(sources main.cpp)
 

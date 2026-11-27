@@ -49,7 +49,9 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/join.hpp>
-#include <boost/program_options.hpp>
+
+#include <rfl.hpp>
+#include <rfl/cli.hpp>
 
 #include <range/v3/action/sort.hpp>
 #include <range/v3/range/conversion.hpp>
@@ -69,8 +71,6 @@ using namespace solidity::util;
 using namespace solidity::langutil;
 using namespace solidity::frontend;
 using namespace solidity::yul;
-
-namespace po = boost::program_options;
 
 class YulOpti
 {
@@ -270,82 +270,79 @@ private:
 
 int main(int argc, char** argv)
 {
+	struct YulOptiArgs
+	{
+		rfl::Positional<rfl::Description<"input file", std::optional<std::string>>> input_file;
+		rfl::Description<"steps to execute non-interactively", std::optional<std::string>> steps;
+		rfl::Short<"n", rfl::Description<"stop after executing the provided steps", rfl::DefaultVal<bool>>> non_interactive = false;
+		rfl::Description<
+			"after the steps, run h and o and insert runtime checks of every fact the DataFlowAnalyzer "
+			"claims; run the output with yulrun",
+			rfl::DefaultVal<bool>> audit = false;
+	};
+	using YulOptiCli = rfl::Processors<
+		rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::short_and_long>,
+		rfl::NoExtraFields,
+		rfl::cli::SeparateOptionValues,
+		rfl::cli::ListDelimiter<"">,
+		rfl::cli::PureFlags
+	>;
+	rfl::cli::UsageOptions const usageOpts{
+		.detailed = true,
+		.header = "yulopti, yul optimizer exploration tool.",
+		.synopsis = "yulopti [Options] <file>",
+		.description =
+			"Reads <file> as yul code and applies optimizer steps to it,\n"
+			"interactively read from stdin.\n"
+			"In non-interactive mode a list of steps has to be provided.\n"
+			"If <file> is -, yul code is read from stdin and run non-interactively.",
+	};
+
 	try
 	{
-		bool nonInteractive = false;
-		bool audit = false;
-		po::options_description options(
-			R"(yulopti, yul optimizer exploration tool.
-	Usage: yulopti [Options] <file>
-	Reads <file> as yul code and applies optimizer steps to it,
-	interactively read from stdin.
-	In non-interactive mode a list of steps has to be provided.
-	If <file> is -, yul code is read from stdin and run non-interactively.
-
-	Allowed options)",
-			po::options_description::m_default_line_length,
-			po::options_description::m_default_line_length - 23);
-		options.add_options()
-			(
-				"input-file",
-				po::value<std::string>(),
-				"input file"
-			)
-			(
-				"steps",
-				po::value<std::string>(),
-				"steps to execute non-interactively"
-			)
-			(
-				"non-interactive,n",
-				po::bool_switch(&nonInteractive)->default_value(false),
-				"stop after executing the provided steps"
-			)
-			(
-				"audit",
-				po::bool_switch(&audit)->default_value(false),
-				"after the steps, run h and o and insert runtime checks of every fact the DataFlowAnalyzer "
-				"claims; run the output with yulrun"
-			)
-			("help,h", "Show this help screen.");
-
-		// All positional options should be interpreted as input files
-		po::positional_options_description filesPositions;
-		filesPositions.add("input-file", 1);
-
-		po::variables_map arguments;
-		po::command_line_parser cmdLineParser(argc, argv);
-		cmdLineParser.options(options).positional(filesPositions);
-		po::store(cmdLineParser.run(), arguments);
-		po::notify(arguments);
-
-		if (arguments.count("help"))
+		auto parsed = rfl::cli::read_app<YulOptiArgs, YulOptiCli>(argc, argv, usageOpts);
+		if (!parsed)
 		{
-			std::cout << options;
+			std::cerr << parsed.error().what() << std::endl;
+			return 1;
+		}
+		if (auto const* info = std::get_if<rfl::cli::HelpOrVersion>(&*parsed))
+		{
+			std::cout << info->text;
 			return 0;
 		}
 
+		auto const& args = std::get<YulOptiArgs>(*parsed);
+		bool nonInteractive = rfl::unwrap(args.non_interactive);
+		bool const audit = rfl::unwrap(args.audit);
+		auto const& inputFileOpt = rfl::unwrap(args.input_file);
+		auto const& stepsOpt = rfl::unwrap(args.steps);
+
+		auto const printUsage = [&]() {
+			if (auto const text = rfl::cli::usage<YulOptiArgs, YulOptiCli>("yulopti", usageOpts))
+				std::cout << *text;
+		};
+
 		std::string input;
-		if (arguments.count("input-file"))
+		if (inputFileOpt)
 		{
-			std::string filename = arguments["input-file"].as<std::string>();
-			if (filename == "-")
+			if (*inputFileOpt == "-")
 			{
 				nonInteractive = true;
 				input = readUntilEnd(std::cin);
 			}
 			else
-				input = readFileAsString(arguments["input-file"].as<std::string>());
+				input = readFileAsString(*inputFileOpt);
 		}
 		else
 		{
-			std::cout << options;
+			printUsage();
 			return 1;
 		}
 
-		if ((nonInteractive || audit) && !arguments.count("steps"))
+		if ((nonInteractive || audit) && !stepsOpt)
 		{
-			std::cout << options;
+			printUsage();
 			return 1;
 		}
 
@@ -353,23 +350,17 @@ int main(int argc, char** argv)
 		bool disambiguated = false;
 		if (!nonInteractive)
 			std::cout << input << std::endl;
-		if (arguments.count("steps"))
+		if (stepsOpt)
 		{
-			std::string sequence = arguments["steps"].as<std::string>();
 			if (!nonInteractive)
 				std::cout << "----------------------" << std::endl;
-			yulOpti.runSteps(input, sequence, audit ? YulOpti::Output::WithFactChecks : YulOpti::Output::Optimized);
+			yulOpti.runSteps(input, *stepsOpt, audit ? YulOpti::Output::WithFactChecks : YulOpti::Output::Optimized);
 			disambiguated = true;
 		}
 		if (!nonInteractive)
 			yulOpti.runInteractive(input, disambiguated);
 
 		return 0;
-	}
-	catch (po::error const& _exception)
-	{
-		std::cerr << _exception.what() << std::endl;
-		return 1;
 	}
 	catch (FileNotFound const& _exception)
 	{

@@ -20,6 +20,7 @@
 */
 
 #include <test/tools/IsolTestOptions.h>
+#include <test/CommonCli.h>
 
 #include <libsolutil/Assertions.h>
 
@@ -30,19 +31,12 @@
 #include <string>
 
 namespace fs = boost::filesystem;
-namespace po = boost::program_options;
 
 namespace solidity::test
 {
 
 namespace
 {
-
-auto const description = R"(isoltest, tool for interactively managing test contracts.
-Usage: isoltest [Options]
-Interactively validates test contracts.
-
-Allowed options)";
 
 std::string editorPath()
 {
@@ -54,37 +48,71 @@ std::string editorPath()
 	return std::string{};
 }
 
+struct IsolTestCliArgs
+{
+	rfl::Flatten<CommonCliArgs> common;
+	rfl::Description<"Path to editor for opening test files.", std::optional<std::string>> editor;
+	rfl::Description<"Show this help screen.", rfl::DefaultVal<bool>> help = false;
+	rfl::Description<"Don't use colors.", rfl::DefaultVal<bool>> no_color = false;
+	rfl::Description<"Automatically accept expectation updates.", rfl::DefaultVal<bool>> accept_updates = false;
+	rfl::Short<"t", rfl::Description<"Filters which test units to include.", rfl::DefaultVal<std::string>>> test = "*/*";
+	rfl::Hidden<rfl::Positional<std::optional<std::vector<std::string>>>> positional;
+};
+
 }
 
 IsolTestOptions::IsolTestOptions():
-	CommonOptions(description)
+	CommonOptions("isoltest, tool for interactively managing test contracts.")
 {
-}
-
-void IsolTestOptions::addOptions()
-{
-	CommonOptions::addOptions();
-	options.add_options()
-		("editor", po::value<std::string>(&editor)->default_value(editorPath()), "Path to editor for opening test files.")
-		("help", po::bool_switch(&showHelp)->default_value(showHelp), "Show this help screen.")
-		("no-color", po::bool_switch(&noColor)->default_value(noColor), "Don't use colors.")
-		("accept-updates", po::bool_switch(&acceptUpdates)->default_value(acceptUpdates), "Automatically accept expectation updates.")
-		("test,t", po::value<std::string>(&testFilter)->default_value("*/*"), "Filters which test units to include.");
 }
 
 bool IsolTestOptions::parse(int _argc, char const* const* _argv)
 {
-	bool const shouldContinue = CommonOptions::parse(_argc, _argv);
+	auto parsed = rfl::cli::read<IsolTestCliArgs, TestCliProcessors>(_argc, _argv);
+	if (!parsed)
+		solThrow(ConfigException, parsed.error().what());
 
-	if (showHelp || !shouldContinue)
+	showHelp = rfl::unwrap(parsed->help);
+	if (showHelp)
 	{
-		std::cout << options << std::endl;
+		rfl::cli::UsageOptions const usageOpts{
+			.detailed = true,
+			.header = "isoltest, tool for interactively managing test contracts.",
+			.synopsis = "isoltest [Options]",
+			.description = "Interactively validates test contracts.",
+		};
+		auto const text = rfl::cli::usage<IsolTestCliArgs, TestCliProcessors>("isoltest", usageOpts);
+		solAssert(text.has_value(), text.error().what());
+		std::cout << *text << std::endl;
 		return false;
 	}
 
+	auto const& c = parsed->common.value();
+	applyCommonCliArgs(
+		rfl::unwrap(c.evm_version),
+		rfl::unwrap(c.testpath),
+		rfl::unwrap(c.vm),
+		rfl::unwrap(c.batches),
+		rfl::unwrap(c.selected_batch),
+		rfl::unwrap(c.no_semantic_tests),
+		rfl::unwrap(c.no_smt),
+		rfl::unwrap(c.optimize),
+		rfl::unwrap(c.enforce_gas_cost),
+		rfl::unwrap(c.enforce_gas_cost_min_value),
+		rfl::unwrap(c.abiencoderv1),
+		rfl::unwrap(c.show_messages),
+		rfl::unwrap(c.show_metadata),
+		rfl::unwrap(parsed->positional)
+	);
+
+	editor = rfl::unwrap(parsed->editor).value_or(editorPath());
+	noColor = rfl::unwrap(parsed->no_color);
+	acceptUpdates = rfl::unwrap(parsed->accept_updates);
+	testFilter = rfl::unwrap(parsed->test);
+
 	enforceGasTest = enforceGasTest || (evmVersion() == langutil::EVMVersion{} && !useABIEncoderV1);
 
-	return shouldContinue;
+	return true;
 }
 
 void IsolTestOptions::validate() const

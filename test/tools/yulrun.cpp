@@ -37,7 +37,8 @@
 #include <libsolutil/CommonData.h>
 #include <libsolutil/Exceptions.h>
 
-#include <boost/program_options.hpp>
+#include <rfl.hpp>
+#include <rfl/cli.hpp>
 
 #include <string>
 #include <memory>
@@ -48,8 +49,6 @@ using namespace solidity::util;
 using namespace solidity::langutil;
 using namespace solidity::yul;
 using namespace solidity::yul::test;
-
-namespace po = boost::program_options;
 
 namespace
 {
@@ -102,76 +101,74 @@ void interpret(std::string const& _source, bool _inspect, bool _disableExternalC
 
 int main(int argc, char** argv)
 {
-	po::options_description options(
-		R"(yulrun, the Yul interpreter.
-Usage: yulrun [Options] < input
-Reads a single source from stdin, runs it and prints a trace of all side-effects.
-
-Allowed options)",
-		po::options_description::m_default_line_length,
-		po::options_description::m_default_line_length - 23);
-	options.add_options()
-		("help", "Show this help screen.")
-		("enable-external-calls", "Enable external calls")
-		("interactive", "Run interactive")
-		("calldata", po::value<std::string>(), "Calldata as hex string")
-		("input-file", po::value<std::vector<std::string>>(), "input file");
-	po::positional_options_description filesPositions;
-	filesPositions.add("input-file", -1);
-
-	po::variables_map arguments;
-	try
+	struct YulRunArgs
 	{
-		po::command_line_parser cmdLineParser(argc, argv);
-		cmdLineParser.options(options).positional(filesPositions);
-		po::store(cmdLineParser.run(), arguments);
-	}
-	catch (po::error const& _exception)
+		rfl::Description<"Enable external calls", rfl::DefaultVal<bool>> enable_external_calls = false;
+		rfl::Description<"Run interactive", rfl::DefaultVal<bool>> interactive = false;
+		rfl::Description<"Calldata as hex string", std::optional<std::string>> calldata;
+		rfl::Positional<rfl::Description<"input file", std::optional<std::vector<std::string>>>> input_file;
+	};
+	using YulRunCli = rfl::Processors<
+		rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::long_only>,
+		rfl::NoExtraFields,
+		rfl::cli::SeparateOptionValues,
+		rfl::cli::ListDelimiter<"">,
+		rfl::cli::PureFlags
+	>;
+	rfl::cli::UsageOptions const usageOpts{
+		.detailed = true,
+		.header = "yulrun, the Yul interpreter.",
+		.synopsis = "yulrun [Options] < input",
+		.description = "Reads a single source from stdin, runs it and prints a trace of all side-effects.",
+	};
+
+	auto parsed = rfl::cli::read_app<YulRunArgs, YulRunCli>(argc, argv, usageOpts);
+	if (!parsed)
 	{
-		std::cerr << _exception.what() << std::endl;
+		std::cerr << parsed.error().what() << std::endl;
 		return 1;
 	}
-
-	if (arguments.count("help"))
-		std::cout << options;
-	else
+	if (auto const* info = std::get_if<rfl::cli::HelpOrVersion>(&*parsed))
 	{
-		std::string input;
-		if (arguments.count("input-file"))
-			for (std::string path: arguments["input-file"].as<std::vector<std::string>>())
-			{
-				try
-				{
-					input += readFileAsString(path);
-				}
-				catch (FileNotFound const&)
-				{
-					std::cerr << "File not found: " << path << std::endl;
-					return 1;
-				}
-				catch (NotAFile const&)
-				{
-					std::cerr << "Not a regular file: " << path << std::endl;
-					return 1;
-				}
-			}
-		else
-			input = readUntilEnd(std::cin);
-
-		bytes calldata;
-		if (arguments.count("calldata"))
-			try
-			{
-				calldata = fromHex(arguments["calldata"].as<std::string>(), WhenError::Throw);
-			}
-			catch (BadHexCharacter const&)
-			{
-				std::cerr << "Calldata is not a hex string." << std::endl;
-				return 1;
-			}
-
-		interpret(input, arguments.count("interactive"), !arguments.count("enable-external-calls"), calldata);
+		std::cout << info->text;
+		return 0;
 	}
 
+	auto const& args = std::get<YulRunArgs>(*parsed);
+	std::string input;
+	if (auto const& files = rfl::unwrap(args.input_file))
+		for (std::string const& path: *files)
+		{
+			try
+			{
+				input += readFileAsString(path);
+			}
+			catch (FileNotFound const&)
+			{
+				std::cerr << "File not found: " << path << std::endl;
+				return 1;
+			}
+			catch (NotAFile const&)
+			{
+				std::cerr << "Not a regular file: " << path << std::endl;
+				return 1;
+			}
+		}
+	else
+		input = readUntilEnd(std::cin);
+
+	bytes calldata;
+	if (auto const& calldataStr = rfl::unwrap(args.calldata))
+		try
+		{
+			calldata = fromHex(*calldataStr, WhenError::Throw);
+		}
+		catch (BadHexCharacter const&)
+		{
+			std::cerr << "Calldata is not a hex string." << std::endl;
+			return 1;
+		}
+
+	interpret(input, rfl::unwrap(args.interactive), !rfl::unwrap(args.enable_external_calls), calldata);
 	return 0;
 }

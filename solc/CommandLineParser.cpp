@@ -32,18 +32,17 @@
 
 #include <fmt/format.h>
 
+#include <rfl.hpp>
+#include <rfl/cli.hpp>
+
 using namespace solidity::langutil;
 using namespace solidity::yul;
-
-namespace po = boost::program_options;
 
 namespace solidity::frontend
 {
 
 static std::string const g_strAllowPaths = "allow-paths";
-static std::string const g_strBasePath = "base-path";
 static std::string const g_strIncludePath = "include-path";
-static std::string const g_strAssemble = "assemble";
 static std::string const g_strCombinedJson = "combined-json";
 static std::string const g_strEVM = "evm";
 static std::string const g_strEVMVersion = "evm-version";
@@ -56,14 +55,11 @@ static std::string const g_strHelp = "help";
 static std::string const g_strImportAst = "import-ast";
 static std::string const g_strImportEvmAssemblerJson = "import-asm-json";
 static std::string const g_strInputFile = "input-file";
-static std::string const g_strYul = "yul";
 static std::string const g_strYulDialect = "yul-dialect";
 static std::string const g_strDebugInfo = "debug-info";
 static std::string const g_strIPFS = "ipfs";
 static std::string const g_strLicense = "license";
-static std::string const g_strLibraries = "libraries";
 static std::string const g_strLink = "link";
-static std::string const g_strLSP = "lsp";
 static std::string const g_strMachine = "machine";
 static std::string const g_strNoCBORMetadata = "no-cbor-metadata";
 static std::string const g_strMetadataHash = "metadata-hash";
@@ -89,49 +85,16 @@ static std::string const g_strOptimizeRuns = "optimize-runs";
 static std::string const g_strOptimizeYul = "optimize-yul";
 static std::string const g_strYulOptimizations = "yul-optimizations";
 static std::string const g_strOutputDir = "output-dir";
-static std::string const g_strOverwrite = "overwrite";
 static std::string const g_strRevertStrings = "revert-strings";
 static std::string const g_strStopAfter = "stop-after";
-
-/// Possible arguments to for --revert-strings
-static std::set<std::string> const g_revertStringsArgs
-{
-	revertStringsToString(RevertStrings::Default),
-	revertStringsToString(RevertStrings::Strip),
-	revertStringsToString(RevertStrings::Debug),
-	revertStringsToString(RevertStrings::VerboseDebug)
-};
-
 static std::string const g_strStandardJSON = "standard-json";
 static std::string const g_strStrictAssembly = "strict-assembly";
 static std::string const g_strSwarm = "swarm";
 static std::string const g_strPrettyJson = "pretty-json";
 static std::string const g_strJsonIndent = "json-indent";
 static std::string const g_strVersion = "version";
-static std::string const g_strIgnoreMissingFiles = "ignore-missing";
 static std::string const g_strColor = "color";
 static std::string const g_strNoColor = "no-color";
-static std::string const g_strErrorIds = "error-codes";
-
-/// Possible arguments to for --machine
-static std::set<std::string> const g_machineArgs
-{
-	g_strEVM
-};
-
-/// Possible arguments to for --yul-dialect
-static std::set<std::string> const g_yulDialectArgs
-{
-	g_strEVM
-};
-
-/// Possible arguments to for --metadata-hash
-static std::set<std::string> const g_metadataHashArgs
-{
-	g_strIPFS,
-	g_strSwarm,
-	g_strNone
-};
 
 static std::map<InputMode, std::string> const g_inputModeName = {
 	{InputMode::Help, "help"},
@@ -144,6 +107,290 @@ static std::map<InputMode, std::string> const g_inputModeName = {
 	{InputMode::Linker, "linker"},
 	{InputMode::EVMAssemblerJSON, "EVM assembler (JSON format)"},
 };
+
+namespace
+{
+
+using Flag = rfl::DefaultVal<bool>;
+using OptStr = std::optional<std::string>;
+using OptStrVec = std::optional<std::vector<std::string>>;
+
+template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral Desc>
+using GroupFlag = rfl::Group<G, rfl::Description<Desc, Flag>>;
+
+template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T = OptStr>
+using GroupOpt = rfl::Group<G, rfl::ValueName<VN, rfl::Description<Desc, T>>>;
+
+template <rfl::internal::StringLiteral Desc>
+using OutCompFlag = GroupFlag<"Output Components", Desc>;
+
+struct GeneralInfoArgs
+{
+	GroupFlag<"General Information", "Show help message and exit."> help = false;
+	GroupFlag<"General Information", "Show version and exit."> version = false;
+	GroupFlag<"General Information", "Show licensing information and exit."> license = false;
+	rfl::Positional<rfl::Group<"General Information", rfl::ValueName<"arg", rfl::Description<"input file", OptStrVec>>>> input_file;
+};
+
+struct InputArgs
+{
+	GroupOpt<"Input Options", "path",
+		"Use the given path as the root of the source tree instead of the root of the filesystem."> base_path;
+	GroupOpt<"Input Options", "path",
+		"Make an additional source directory available to the default import callback. "
+		"Use this option if you want to import contracts whose location is not fixed in relation "
+		"to your main source tree, e.g. third-party libraries installed using a package manager. "
+		"Can be used multiple times. "
+		"Can only be used if base path has a non-empty value.",
+		OptStrVec> include_path;
+	GroupOpt<"Input Options", "path(s)",
+		"Allow a given path for imports. A list of paths can be supplied by separating them with a comma."> allow_paths;
+	GroupFlag<"Input Options", "Ignore missing files."> ignore_missing = false;
+	GroupFlag<"Input Options",
+		"Disable the default import callback to prevent the compiler from loading any source "
+		"files not listed on the command line or given in the Standard JSON input."> no_import_callback = false;
+};
+
+struct OutputArgs
+{
+	rfl::Short<"o", GroupOpt<"Output Options", "path",
+		"If given, creates one file per output component and contract/file at the specified directory.">> output_dir;
+	GroupFlag<"Output Options", "Overwrite existing files (used together with -o)."> overwrite = false;
+	GroupOpt<"Output Options", "version", "Select desired EVM version."> evm_version;
+	GroupFlag<"Output Options", "Deprecated synonym of --via-ir."> experimental_via_ir = false;
+	GroupFlag<"Output Options", "Turn on compilation via IR."> via_ir = false;
+	GroupFlag<"Output Options", "(experimental) Turn on SSA CFG-based code generation. Implies compilation via IR."> via_ssa_cfg = false;
+	GroupOpt<"Output Options", "debug,default,strip,verboseDebug",
+		"Strip revert (and require) reason strings or add additional debugging information. "
+		"Note that 'strip' does not remove custom errors."> revert_strings;
+	GroupOpt<"Output Options", "value",
+		"Debug info components to be included in the produced EVM assembly and Yul code. "
+		"Value can be 'all', 'none' or a comma-separated list of debug info components."> debug_info;
+	GroupOpt<"Output Options", "stage",
+		"Stop execution after the given compiler stage. Valid options: \"parsing\"."> stop_after;
+};
+
+struct AlternativeInputArgs
+{
+	GroupFlag<"Alternative Input Modes",
+		"Switch to Standard JSON input / output mode, ignoring all options. "
+		"It reads from standard input, if no input file was given, otherwise it reads from the provided input file. "
+		"The result will be written to standard output."> standard_json = false;
+	GroupFlag<"Alternative Input Modes",
+		"Switch to linker mode, ignoring all options apart from --libraries and modify binaries in place."> link = false;
+	GroupFlag<"Alternative Input Modes",
+		"Switch to strict assembly mode and assume input is strict assembly."> strict_assembly = false;
+	GroupFlag<"Alternative Input Modes",
+		"(experimental) Resume compilation from an abstract syntax tree (AST) representing already parsed and analyzed Solidity code."> import_ast = false;
+	GroupFlag<"Alternative Input Modes",
+		"(experimental) Resume compilation from EVM assembly in JSON format."> import_asm_json = false;
+};
+
+struct AssemblyModeArgs
+{
+	GroupOpt<"Assembly Mode Options", "evm", "Target machine in assembly or Yul mode."> machine;
+	GroupOpt<"Assembly Mode Options", "evm", "Input dialect to use in assembly or yul mode."> yul_dialect;
+};
+
+struct LinkerModeArgs
+{
+	GroupOpt<"Linker Mode Options", "libs",
+		"Direct string or file containing library addresses. Syntax: "
+		"<libraryName>=<address> [, or whitespace] ...\n"
+		"Address is interpreted as a hex string prefixed by 0x.",
+		OptStrVec> libraries;
+};
+
+struct OutputFormattingArgs
+{
+	GroupFlag<"Output Formatting", "Output JSON in pretty format."> pretty_json = false;
+	GroupOpt<"Output Formatting", "N",
+		"Indent pretty-printed JSON with N spaces. Enables '--pretty-json' automatically.",
+		std::optional<uint32_t>> json_indent;
+	GroupFlag<"Output Formatting", "Force colored output."> color = false;
+	GroupFlag<"Output Formatting", "Explicitly disable colored output, disabling terminal auto-detection."> no_color = false;
+	GroupFlag<"Output Formatting", "Output error codes."> error_codes = false;
+};
+
+struct OutputComponentArgs
+{
+	OutCompFlag<"AST of all source files in a compact JSON format."> ast_compact_json = false;
+	rfl::Rename<"asm", OutCompFlag<"EVM assembly of the contracts.">> asm_ = false;
+	OutCompFlag<"EVM assembly of the contracts in JSON format."> asm_json = false;
+	OutCompFlag<"Opcodes of the contracts."> opcodes = false;
+	OutCompFlag<"Binary of the contracts in hex."> bin = false;
+	OutCompFlag<"Binary of the runtime part of the contracts in hex."> bin_runtime = false;
+	OutCompFlag<"ABI specification of the contracts."> abi = false;
+	OutCompFlag<"Intermediate Representation (IR) of all contracts."> ir = false;
+	OutCompFlag<"(experimental) AST of Intermediate Representation (IR) of all contracts in a compact JSON format."> ir_ast_json = false;
+	OutCompFlag<"Optimized Intermediate Representation (IR) of all contracts."> ir_optimized = false;
+	OutCompFlag<"(experimental) AST of optimized Intermediate Representation (IR) of all contracts in a compact JSON format."> ir_optimized_ast_json = false;
+	OutCompFlag<"Function signature hashes of the contracts."> hashes = false;
+	OutCompFlag<"Natspec user documentation of all contracts."> userdoc = false;
+	OutCompFlag<"Natspec developer documentation of all contracts."> devdoc = false;
+	OutCompFlag<"Combined Metadata JSON whose IPFS hash is stored on-chain."> metadata = false;
+	OutCompFlag<"Slots, offsets and types of the contract's state variables located in storage."> storage_layout = false;
+	OutCompFlag<"Slots, offsets and types of the contract's state variables located in transient storage."> transient_storage_layout = false;
+	OutCompFlag<"(experimental) Global ethdebug type and pointer tables (ethdebug/format/info/resources schema)."> ethdebug_resources = false;
+	OutCompFlag<"(experimental) Compiler information and source list (ethdebug/format/materials/compilation schema)."> ethdebug_compilation = false;
+	OutCompFlag<"(experimental) Debug information in ethdebug format for all contracts (ethdebug/format/program schema for creation bytecode)."> ethdebug_program = false;
+	OutCompFlag<"(experimental) Debug information in ethdebug format for the runtime part of all contracts (ethdebug/format/program schema for deployed bytecode)."> ethdebug_program_runtime = false;
+};
+
+struct ExtraOutputArgs
+{
+	GroupFlag<"Extra Output", "Print an estimate of the maximal gas usage for each function."> gas = false;
+	GroupOpt<"Extra Output", "abi,asm,ast,bin,bin-runtime,devdoc,function-debug,function-debug-runtime,generated-sources,generated-sources-runtime,hashes,metadata,opcodes,srcmap,srcmap-runtime,storage-layout,transient-storage-layout,userdoc",
+		"Output a single json document containing the specified information."> combined_json;
+};
+
+struct MetadataArgs
+{
+	GroupFlag<"Metadata Options", "Do not append CBOR metadata to the end of the bytecode."> no_cbor_metadata = false;
+	GroupOpt<"Metadata Options", "ipfs,none,swarm", "Choose hash method for the bytecode metadata or disable it."> metadata_hash;
+	GroupFlag<"Metadata Options", "Store referenced sources as literal data in the metadata output."> metadata_literal = false;
+};
+
+struct OptimizerArgs
+{
+	GroupFlag<"Optimizer Options", "Enable optimizer."> optimize = false;
+	GroupOpt<"Optimizer Options", "n",
+		"The number of runs specifies roughly how often each opcode of the deployed code will be executed across the lifetime of the contract. "
+		"Lower values will optimize more for initial deployment cost, higher values will optimize more for high-frequency usage.",
+		std::optional<OptimiserSettings::ExecutionCount>> optimize_runs;
+	GroupFlag<"Optimizer Options",
+		"Enable Yul optimizer (independently of the EVM assembly optimizer). "
+		"The general --optimize option automatically enables this unless --no-optimize-yul is specified."> optimize_yul = false;
+	GroupFlag<"Optimizer Options", "Disable Yul optimizer (independently of the EVM assembly optimizer)."> no_optimize_yul = false;
+	GroupOpt<"Optimizer Options", "steps",
+		"Forces Yul optimizer to use the specified sequence of optimization steps instead of the built-in one."> yul_optimizations;
+};
+
+struct ModelCheckerArgs
+{
+	GroupOpt<"Model Checker Options", "default,<source>:<contract>",
+		"Select which contracts should be analyzed using the form <source>:<contract>. "
+		"Multiple pairs <source>:<contract> can be selected at the same time, separated by a comma and no spaces."> model_checker_contracts;
+	GroupFlag<"Model Checker Options",
+		"Encode division and modulo operations with their precise operators instead of multiplication with slack variables."> model_checker_div_mod_no_slacks = false;
+	GroupOpt<"Model Checker Options", "all,bmc,chc,none", "Select model checker engine."> model_checker_engine;
+	GroupOpt<"Model Checker Options", "untrusted,trusted",
+		"Select whether to assume (trusted) that external calls always invoke the code given by the type of the contract, if that code is available."> model_checker_ext_calls;
+	GroupOpt<"Model Checker Options", "default,all,contract,reentrancy",
+		"Select whether to report inferred contract inductive invariants. "
+		"Multiple types of invariants can be selected at the same time, separated by a comma and no spaces. "
+		"By default no invariants are reported."> model_checker_invariants;
+	GroupFlag<"Model Checker Options", "Print the queries created by the SMTChecker in the SMTLIB2 format."> model_checker_print_query = false;
+	GroupFlag<"Model Checker Options", "Show all targets that were proved safe separately."> model_checker_show_proved_safe = false;
+	GroupFlag<"Model Checker Options", "Show all unproved targets separately."> model_checker_show_unproved = false;
+	GroupFlag<"Model Checker Options", "Show all unsupported language features separately."> model_checker_show_unsupported = false;
+	GroupOpt<"Model Checker Options", "cvc5,eld,z3,smtlib2", "Select model checker solvers."> model_checker_solvers;
+	GroupOpt<"Model Checker Options", "default,all,constantCondition,underflow,overflow,divByZero,balance,assert,popEmptyArray,outOfBounds",
+		"Select model checker verification targets. "
+		"Multiple targets can be selected at the same time, separated by a comma and no spaces. "
+		"By default all targets except underflow and overflow are selected."> model_checker_targets;
+	GroupOpt<"Model Checker Options", "ms",
+		"Set model checker timeout per query in milliseconds. "
+		"The default is a deterministic resource limit. "
+		"A timeout of 0 means no resource/time restrictions for any query.",
+		std::optional<unsigned>> model_checker_timeout;
+	GroupOpt<"Model Checker Options", "value",
+		"Set loop unrolling depth for BMC engine. Default is 1.",
+		std::optional<unsigned>> model_checker_bmc_loop_iterations;
+};
+
+struct ExperimentalArgs
+{
+	GroupFlag<"Experimental options",
+		"Enable experimental mode. "
+		"This flag does not activate any experimental features on its own - "
+		"it unlocks the ability to use them through the usual flags and pragmas."> experimental = false;
+};
+
+struct DisabledArgs
+{
+	rfl::Hidden<Flag> assemble = false;
+	rfl::Hidden<Flag> lsp = false;
+	rfl::Hidden<Flag> yul = false;
+};
+
+using SolcCli = rfl::Processors<
+	rfl::NoExtraFields,
+	rfl::cli::SeparateOptionValues,
+	rfl::cli::ListDelimiter<"">,
+	rfl::cli::PureFlags
+>;
+
+} // namespace
+
+struct CommandLineParser::RawArgs
+{
+	rfl::Flatten<GeneralInfoArgs> general;
+	rfl::Flatten<InputArgs> input;
+	rfl::Flatten<OutputArgs> output;
+	rfl::Flatten<AlternativeInputArgs> alt_input;
+	rfl::Flatten<AssemblyModeArgs> assembly;
+	rfl::Flatten<LinkerModeArgs> linker;
+	rfl::Flatten<OutputFormattingArgs> formatting;
+	rfl::Flatten<OutputComponentArgs> outputs;
+	rfl::Flatten<ExtraOutputArgs> extra_output;
+	rfl::Flatten<MetadataArgs> metadata;
+	rfl::Flatten<OptimizerArgs> optimizer;
+	rfl::Flatten<ModelCheckerArgs> model_checker;
+	rfl::Flatten<ExperimentalArgs> experimental;
+	rfl::Flatten<DisabledArgs> disabled;
+};
+
+std::set<std::string> CommandLineParser::collectProvidedOptions(RawArgs const& _raw)
+{
+	std::set<std::string> provided;
+	auto const view = rfl::SnakeCaseToKebabCase::process<RawArgs>(rfl::to_view(_raw));
+	view.apply([&](auto const& _field) {
+		auto const& unwrapped = rfl::unwrap(*_field.value());
+		using Val = std::remove_cvref_t<decltype(unwrapped)>;
+		if constexpr (std::is_same_v<Val, bool>)
+		{
+			if (unwrapped)
+				provided.emplace(_field.name());
+		}
+		else
+		{
+			if (unwrapped.has_value())
+				provided.emplace(_field.name());
+		}
+	});
+	return provided;
+}
+
+CommandLineParser::CommandLineParser() = default;
+CommandLineParser::~CommandLineParser() = default;
+CommandLineParser::CommandLineParser(CommandLineParser&&) noexcept = default;
+CommandLineParser& CommandLineParser::operator=(CommandLineParser&&) noexcept = default;
+
+void CommandLineParser::printHelp(std::ostream& _out)
+{
+	rfl::cli::UsageOptions const usageOpts{
+		.detailed = true,
+		.header =
+			"solc, the Solidity commandline compiler.\n\n"
+			"This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you\n"
+			"are welcome to redistribute it under certain conditions. See 'solc --" + g_strLicense + "'\n"
+			"for details.",
+		.synopsis = "solc [options] [input_file...]",
+		.description =
+			"Compiles the given Solidity input files (or the standard input if \"-\" is\n"
+			"used as a file name) and outputs the components specified in the options\n"
+			"at standard output or in files in the output directory, if specified.\n"
+			"Imports are automatically read from the filesystem, but it is also possible to\n"
+			"remap paths using the context:prefix=path syntax.\n"
+			"Example:\n"
+			"solc --" + CompilerOutputs::componentName(&CompilerOutputs::binary) +
+			" -o /tmp/solcoutput dapp-bin=/usr/local/lib/dapp-bin contract.sol",
+	};
+	auto const text = rfl::cli::usage<RawArgs, SolcCli>("solc", usageOpts);
+	solAssert(text.has_value(), text.error().what());
+	_out << *text;
+}
 
 void CommandLineParser::checkMutuallyExclusive(std::vector<std::string> const& _optionNames)
 {
@@ -175,7 +422,8 @@ std::vector<std::string> const& CommandLineParser::experimentalOptionNames()
 
 void CommandLineParser::checkExperimental(std::vector<std::string> const& _optionNames) const
 {
-	if (!m_args.contains(g_strExperimental) && countEnabledOptions(_optionNames) > 0)
+	bool const experimental = rfl::unwrap(m_rawArgs->experimental.value().experimental);
+	if (!experimental && countEnabledOptions(_optionNames) > 0)
 	{
 		solThrow(
 			CommandLineValidationError,
@@ -188,10 +436,10 @@ void CommandLineParser::checkExperimental(std::vector<std::string> const& _optio
 		);
 	}
 
-	if (!m_args.contains(g_strExperimental) && m_args.contains(g_strEVMVersion))
+	auto const& evmVersionOpt = rfl::unwrap(m_rawArgs->output.value().evm_version);
+	if (!experimental && evmVersionOpt.has_value())
 	{
-		std::string versionOptionStr = m_args[g_strEVMVersion].as<std::string>();
-		std::optional<langutil::EVMVersion> versionOption = langutil::EVMVersion::fromString(versionOptionStr);
+		std::optional<langutil::EVMVersion> versionOption = langutil::EVMVersion::fromString(*evmVersionOpt);
 
 		if (versionOption.has_value() && versionOption->isExperimental())
 			solThrow(
@@ -293,10 +541,10 @@ void CommandLineParser::parse(int _argc, char const* const* _argv)
 
 void CommandLineParser::parseInputPathsAndRemappings()
 {
-	m_options.input.ignoreMissingFiles = (m_args.count(g_strIgnoreMissingFiles) > 0);
+	m_options.input.ignoreMissingFiles = rfl::unwrap(m_rawArgs->input.value().ignore_missing);
 
-	if (m_args.count(g_strInputFile))
-		for (std::string const& positionalArg: m_args[g_strInputFile].as<std::vector<std::string>>())
+	if (auto const& inputFiles = rfl::unwrap(m_rawArgs->general.value().input_file))
+		for (std::string const& positionalArg: *inputFiles)
 		{
 			if (ImportRemapper::isRemapping(positionalArg))
 			{
@@ -451,7 +699,7 @@ void CommandLineParser::parseLibraryOption(std::string const& _input)
 
 std::vector<std::string> CommandLineParser::enabledOptions(std::vector<std::string> const& _optionList) const
 {
-	auto optionEnabled = [&](std::string const& _option) { return m_args.contains(_option); };
+	auto optionEnabled = [&](std::string const& _option) { return m_providedOptions.contains(_option); };
 	return _optionList | ranges::views::filter(optionEnabled) | ranges::to_vector;
 }
 
@@ -501,7 +749,7 @@ void CommandLineParser::parseOutputSelection()
 	};
 
 	for (auto&& [optionName, outputComponent]: CompilerOutputs::componentMap())
-		m_options.compiler.outputs.*outputComponent = (m_args.count(optionName) > 0);
+		m_options.compiler.outputs.*outputComponent = m_providedOptions.contains(optionName);
 
 	if (m_options.input.mode == InputMode::Assembler && m_options.compiler.outputs == CompilerOutputs{})
 	{
@@ -525,455 +773,40 @@ void CommandLineParser::parseOutputSelection()
 		);
 }
 
-po::options_description CommandLineParser::optionsDescription()
-{
-	// Declare the supported options.
-	po::options_description desc((R"(solc, the Solidity commandline compiler.
-
-This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you
-are welcome to redistribute it under certain conditions. See 'solc --)" + g_strLicense + R"('
-for details.
-
-Usage: solc [options] [input_file...]
-Compiles the given Solidity input files (or the standard input if "-" is
-used as a file name) and outputs the components specified in the options
-at standard output or in files in the output directory, if specified.
-Imports are automatically read from the filesystem, but it is also possible to
-remap paths using the context:prefix=path syntax.
-Example:
-solc --)" + CompilerOutputs::componentName(&CompilerOutputs::binary) + R"( -o /tmp/solcoutput dapp-bin=/usr/local/lib/dapp-bin contract.sol
-
-General Information)").c_str(),
-		po::options_description::m_default_line_length,
-		po::options_description::m_default_line_length - 23
-	);
-	desc.add_options()
-		(g_strHelp.c_str(), "Show help message and exit.")
-		(g_strVersion.c_str(), "Show version and exit.")
-		(g_strLicense.c_str(), "Show licensing information and exit.")
-	;
-
-	po::options_description inputOptions("Input Options");
-	inputOptions.add_options()
-		(
-			g_strBasePath.c_str(),
-			po::value<std::string>()->value_name("path"),
-			"Use the given path as the root of the source tree instead of the root of the filesystem."
-		)
-		(
-			g_strIncludePath.c_str(),
-			po::value<std::vector<std::string>>()->value_name("path"),
-			"Make an additional source directory available to the default import callback. "
-			"Use this option if you want to import contracts whose location is not fixed in relation "
-			"to your main source tree, e.g. third-party libraries installed using a package manager. "
-			"Can be used multiple times. "
-			"Can only be used if base path has a non-empty value."
-		)
-		(
-			g_strAllowPaths.c_str(),
-			po::value<std::string>()->value_name("path(s)"),
-			"Allow a given path for imports. A list of paths can be supplied by separating them with a comma."
-		)
-		(
-			g_strIgnoreMissingFiles.c_str(),
-			"Ignore missing files."
-		)
-		(
-			g_strNoImportCallback.c_str(),
-			"Disable the default import callback to prevent the compiler from loading any source "
-			"files not listed on the command line or given in the Standard JSON input."
-		)
-	;
-	desc.add(inputOptions);
-
-	auto const annotateEVMVersion = [](EVMVersion const& _version) {
-		return _version.name() + (_version.isExperimental() ? " (experimental)" : "");
-	};
-	static auto constexpr allEVMVersions = EVMVersion::allVersions();
-	std::string annotatedEVMVersions = util::joinHumanReadable(
-		allEVMVersions | ranges::views::transform(annotateEVMVersion),
-		", ",
-		", or "
-	);
-
-	po::options_description outputOptions("Output Options");
-	outputOptions.add_options()
-		(
-			(g_strOutputDir + ",o").c_str(),
-			po::value<std::string>()->value_name("path"),
-			"If given, creates one file per output component and contract/file at the specified directory."
-		)
-		(
-			g_strOverwrite.c_str(),
-			"Overwrite existing files (used together with -o)."
-		)
-		(
-			g_strEVMVersion.c_str(),
-			po::value<std::string>()->value_name("version")->default_value(EVMVersion{}.name()),
-			("Select desired EVM version: " + annotatedEVMVersions + ".").c_str()
-		)
-	;
-	outputOptions.add_options()
-		(
-			g_strExperimentalViaIR.c_str(),
-			"Deprecated synonym of --via-ir."
-		)
-		(
-			g_strViaIR.c_str(),
-			"Turn on compilation via IR."
-		)
-		(
-			g_strViaSSACFG.c_str(),
-			"(experimental) Turn on SSA CFG-based code generation. Implies compilation via IR."
-		)
-		(
-			g_strRevertStrings.c_str(),
-			po::value<std::string>()->value_name(util::joinHumanReadable(g_revertStringsArgs, ",")),
-			"Strip revert (and require) reason strings or add additional debugging information. "
-			"Note that 'strip' does not remove custom errors."
-		)
-		(
-			g_strDebugInfo.c_str(),
-			po::value<std::string>()->default_value(util::toString(DebugInfoSelection::Default())),
-			("Debug info components to be included in the produced EVM assembly and Yul code. "
-			"Value can be 'all', 'none' or a comma-separated list containing one or more of the "
-			"following components: " + util::joinHumanReadable(DebugInfoSelection::AllExceptExperimental().selectedNames()) +
-			", or ethdebug (experimental). "
-			"Note that 'all' does not include experimental components.").c_str()
-		)
-		(
-			g_strStopAfter.c_str(),
-			po::value<std::string>()->value_name("stage"),
-			"Stop execution after the given compiler stage. Valid options: \"parsing\"."
-		)
-	;
-	desc.add(outputOptions);
-
-	po::options_description alternativeInputModes("Alternative Input Modes");
-	alternativeInputModes.add_options()
-		(
-			g_strStandardJSON.c_str(),
-			"Switch to Standard JSON input / output mode, ignoring all options. "
-			"It reads from standard input, if no input file was given, otherwise it reads from the provided input file. The result will be written to standard output."
-		)
-		(
-			g_strLink.c_str(),
-			("Switch to linker mode, ignoring all options apart from --" + g_strLibraries + " "
-			"and modify binaries in place.").c_str()
-		)
-		(
-			g_strStrictAssembly.c_str(),
-			"Switch to strict assembly mode and assume input is strict assembly."
-		)
-		(
-			g_strImportAst.c_str(),
-			("(experimental) Resume compilation from an abstract syntax tree (AST) representing already parsed and analyzed Solidity code. "
-			"In this mode the compiler expects exactly one input file, containing an AST in compact JSON format, as produced by"
-			" --" + CompilerOutputs::componentName(&CompilerOutputs::astCompactJson) + ", --" +
-			CombinedJsonRequests::componentName(&CombinedJsonRequests::ast) + " ast or the 'ast' output in Standard JSON.").c_str()
-		)
-		(
-			g_strImportEvmAssemblerJson.c_str(),
-			("(experimental) Resume compilation from EVM assembly. "
-			"In this mode the compiler expects exactly one input file, containing assembly in JSON format, "
-			"as produced by --" + g_strImportEvmAssemblerJson + "or the 'evm.legacyAssembly' output in Standard JSON. "
-			"WARNING: --" + g_strImportEvmAssemblerJson + " output is already optimized according to settings stored in metadata. "
-			"Using --" + g_strOptimize + " in this mode is allowed, but not necessary under normal circumstances. "
-			"--" + g_strOptimize + " forces the optimizer to run again and can produce bytecode that is not reproducible from metadata.").c_str()
-		)
-	;
-	desc.add(alternativeInputModes);
-
-	po::options_description assemblyModeOptions("Assembly Mode Options");
-	assemblyModeOptions.add_options()
-		(
-			g_strMachine.c_str(),
-			po::value<std::string>()->value_name(util::joinHumanReadable(g_machineArgs, ",")),
-			"Target machine in assembly or Yul mode."
-		)
-		(
-			g_strYulDialect.c_str(),
-			po::value<std::string>()->value_name(util::joinHumanReadable(g_yulDialectArgs, ",")),
-			"Input dialect to use in assembly or yul mode."
-		)
-	;
-	desc.add(assemblyModeOptions);
-
-	po::options_description linkerModeOptions("Linker Mode Options");
-	linkerModeOptions.add_options()
-		(
-			g_strLibraries.c_str(),
-			po::value<std::vector<std::string>>()->value_name("libs"),
-			"Direct string or file containing library addresses. Syntax: "
-			"<libraryName>=<address> [, or whitespace] ...\n"
-			"Address is interpreted as a hex string prefixed by 0x."
-		)
-	;
-	desc.add(linkerModeOptions);
-
-	po::options_description outputFormatting("Output Formatting");
-	outputFormatting.add_options()
-		(
-			g_strPrettyJson.c_str(),
-			"Output JSON in pretty format."
-		)
-		(
-			g_strJsonIndent.c_str(),
-			po::value<uint32_t>()->value_name("N")->default_value(util::JsonFormat::defaultIndent),
-			"Indent pretty-printed JSON with N spaces. Enables '--pretty-json' automatically."
-		)
-		(
-			g_strColor.c_str(),
-			"Force colored output."
-		)
-		(
-			g_strNoColor.c_str(),
-			"Explicitly disable colored output, disabling terminal auto-detection."
-		)
-		(
-			g_strErrorIds.c_str(),
-			"Output error codes."
-		)
-	;
-	desc.add(outputFormatting);
-
-	po::options_description outputComponents("Output Components");
-	outputComponents.add_options()
-		(CompilerOutputs::componentName(&CompilerOutputs::astCompactJson).c_str(), "AST of all source files in a compact JSON format.")
-		(CompilerOutputs::componentName(&CompilerOutputs::asm_).c_str(), "EVM assembly of the contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::asmJson).c_str(), "EVM assembly of the contracts in JSON format.")
-		(CompilerOutputs::componentName(&CompilerOutputs::opcodes).c_str(), "Opcodes of the contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::binary).c_str(), "Binary of the contracts in hex.")
-		(CompilerOutputs::componentName(&CompilerOutputs::binaryRuntime).c_str(), "Binary of the runtime part of the contracts in hex.")
-		(CompilerOutputs::componentName(&CompilerOutputs::abi).c_str(), "ABI specification of the contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::ir).c_str(), "Intermediate Representation (IR) of all contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::irAstJson).c_str(), "(experimental) AST of Intermediate Representation (IR) of all contracts in a compact JSON format.")
-		(CompilerOutputs::componentName(&CompilerOutputs::irOptimized).c_str(), "Optimized Intermediate Representation (IR) of all contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::irOptimizedAstJson).c_str(), "(experimental) AST of optimized Intermediate Representation (IR) of all contracts in a compact JSON format.")
-		(CompilerOutputs::componentName(&CompilerOutputs::signatureHashes).c_str(), "Function signature hashes of the contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::natspecUser).c_str(), "Natspec user documentation of all contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::natspecDev).c_str(), "Natspec developer documentation of all contracts.")
-		(CompilerOutputs::componentName(&CompilerOutputs::metadata).c_str(), "Combined Metadata JSON whose IPFS hash is stored on-chain.")
-		(CompilerOutputs::componentName(&CompilerOutputs::storageLayout).c_str(), "Slots, offsets and types of the contract's state variables located in storage.")
-		(CompilerOutputs::componentName(&CompilerOutputs::transientStorageLayout).c_str(), "Slots, offsets and types of the contract's state variables located in transient storage.")
-	(
-		CompilerOutputs::componentName(&CompilerOutputs::ethdebugResources).c_str(),
-		"(experimental) Global ethdebug type and pointer tables (ethdebug/format/info/resources schema)."
-	)
-	(
-		CompilerOutputs::componentName(&CompilerOutputs::ethdebugCompilation).c_str(),
-		"(experimental) Compiler information and source list (ethdebug/format/materials/compilation schema)."
-	)
-	(
-		CompilerOutputs::componentName(&CompilerOutputs::ethdebugProgram).c_str(),
-		"(experimental) Debug information in ethdebug format for all contracts (ethdebug/format/program schema for creation bytecode)."
-	)
-	(
-		CompilerOutputs::componentName(&CompilerOutputs::ethdebugProgramRuntime).c_str(),
-		"(experimental) Debug information in ethdebug format for the runtime part of all contracts (ethdebug/format/program schema for deployed bytecode)."
-	);
-	desc.add(outputComponents);
-
-	po::options_description extraOutput("Extra Output");
-	extraOutput.add_options()
-		(
-			g_strGas.c_str(),
-			"Print an estimate of the maximal gas usage for each function."
-		)
-		(
-			g_strCombinedJson.c_str(),
-			po::value<std::string>()->value_name(util::joinHumanReadable(CombinedJsonRequests::componentMap() | ranges::views::keys, ",")),
-			"Output a single json document containing the specified information."
-		)
-	;
-	desc.add(extraOutput);
-
-	po::options_description metadataOptions("Metadata Options");
-	metadataOptions.add_options()
-		(
-			g_strNoCBORMetadata.c_str(),
-			"Do not append CBOR metadata to the end of the bytecode."
-		)
-		(
-			g_strMetadataHash.c_str(),
-			po::value<std::string>()->value_name(util::joinHumanReadable(g_metadataHashArgs, ",")),
-			"Choose hash method for the bytecode metadata or disable it."
-		)
-		(
-			g_strMetadataLiteral.c_str(),
-			"Store referenced sources as literal data in the metadata output."
-		)
-	;
-	desc.add(metadataOptions);
-
-	po::options_description optimizerOptions("Optimizer Options");
-	optimizerOptions.add_options()
-		(
-			g_strOptimize.c_str(),
-			"Enable optimizer."
-		)
-		(
-			g_strOptimizeRuns.c_str(),
-			po::value<OptimiserSettings::ExecutionCount>()->value_name("n")->default_value(OptimiserSettings{}.expectedExecutionsPerDeployment),
-			"The number of runs specifies roughly how often each opcode of the deployed code will be executed across the lifetime of the contract. "
-			"Lower values will optimize more for initial deployment cost, higher values will optimize more for high-frequency usage."
-		)
-		(
-			g_strOptimizeYul.c_str(),
-			("Enable Yul optimizer (independently of the EVM assembly optimizer). "
-			"The general --" + g_strOptimize + " option automatically enables this unless --" +
-			g_strNoOptimizeYul + " is specified.").c_str()
-		)
-		(
-			g_strNoOptimizeYul.c_str(),
-			"Disable Yul optimizer (independently of the EVM assembly optimizer)."
-		)
-		(
-			g_strYulOptimizations.c_str(),
-			po::value<std::string>()->value_name("steps"),
-			"Forces Yul optimizer to use the specified sequence of optimization steps instead of the built-in one."
-		)
-	;
-	desc.add(optimizerOptions);
-
-	po::options_description smtCheckerOptions("Model Checker Options");
-	smtCheckerOptions.add_options()
-		(
-			g_strModelCheckerContracts.c_str(),
-			po::value<std::string>()->value_name("default,<source>:<contract>")->default_value("default"),
-			"Select which contracts should be analyzed using the form <source>:<contract>."
-			"Multiple pairs <source>:<contract> can be selected at the same time, separated by a comma "
-			"and no spaces."
-		)
-		(
-			g_strModelCheckerDivModNoSlacks.c_str(),
-			"Encode division and modulo operations with their precise operators"
-			" instead of multiplication with slack variables."
-		)
-		(
-			g_strModelCheckerEngine.c_str(),
-			po::value<std::string>()->value_name("all,bmc,chc,none")->default_value("none"),
-			"Select model checker engine."
-		)
-		(
-			g_strModelCheckerExtCalls.c_str(),
-			po::value<std::string>()->value_name("untrusted,trusted")->default_value("untrusted"),
-			"Select whether to assume (trusted) that external calls always invoke"
-			" the code given by the type of the contract, if that code is available."
-		)
-		(
-			g_strModelCheckerInvariants.c_str(),
-			po::value<std::string>()->value_name("default,all,contract,reentrancy")->default_value("default"),
-			"Select whether to report inferred contract inductive invariants."
-			" Multiple types of invariants can be selected at the same time, separated by a comma and no spaces."
-			" By default no invariants are reported."
-		)
-		(
-			g_strModelCheckerPrintQuery.c_str(),
-			"Print the queries created by the SMTChecker in the SMTLIB2 format."
-		)
-		(
-			g_strModelCheckerShowProvedSafe.c_str(),
-			"Show all targets that were proved safe separately."
-		)
-		(
-			g_strModelCheckerShowUnproved.c_str(),
-			"Show all unproved targets separately."
-		)
-		(
-			g_strModelCheckerShowUnsupported.c_str(),
-			"Show all unsupported language features separately."
-		)
-		(
-			g_strModelCheckerSolvers.c_str(),
-			po::value<std::string>()->value_name("cvc5,eld,z3,smtlib2")->default_value("z3"),
-			"Select model checker solvers."
-		)
-		(
-			g_strModelCheckerTargets.c_str(),
-			po::value<std::string>()->value_name("default,all,constantCondition,underflow,overflow,divByZero,balance,assert,popEmptyArray,outOfBounds")->default_value("default"),
-			"Select model checker verification targets."
-			"Multiple targets can be selected at the same time, separated by a comma and no spaces."
-			" By default all targets except underflow and overflow are selected."
-		)
-		(
-			g_strModelCheckerTimeout.c_str(),
-			po::value<unsigned>()->value_name("ms"),
-			"Set model checker timeout per query in milliseconds."
-			"The default is a deterministic resource limit."
-			"A timeout of 0 means no resource/time restrictions for any query."
-		)
-		(
-			g_strModelCheckerBMCLoopIterations.c_str(),
-			po::value<unsigned>(),
-			"Set loop unrolling depth for BMC engine."
-			"Default is 1."
-		)
-	;
-	desc.add(smtCheckerOptions);
-
-	po::options_description experimentalOptions("Experimental options");
-	experimentalOptions.add_options()
-		(
-			g_strExperimental.c_str(),
-			"Enable experimental mode. "
-			"This flag does not activate any experimental features on its own - "
-			"it unlocks the ability to use them through the usual flags and pragmas."
-		)
-	;
-	desc.add(experimentalOptions);
-
-	desc.add_options()(g_strInputFile.c_str(), po::value<std::vector<std::string>>(), "input file");
-	return desc;
-}
-
-po::positional_options_description CommandLineParser::positionalOptionsDescription()
-{
-	// All positional options should be interpreted as input files
-	po::positional_options_description filesPositions;
-	filesPositions.add(g_strInputFile.c_str(), -1);
-	return filesPositions;
-}
-
 void CommandLineParser::parseArgs(int _argc, char const* const* _argv)
 {
-	po::options_description allOptions = optionsDescription();
-	// Disabled options: still accepted for parsing so that we can produce a proper error message,
-	// but hidden from --help output.
-	allOptions.add_options()
-		(g_strAssemble.c_str(), "")
-		(g_strLSP.c_str(), "")
-		(g_strYul.c_str(), "")
-	;
-	po::positional_options_description filesPositions = positionalOptionsDescription();
-
 	m_options = {};
-	m_args = {};
+	m_providedOptions.clear();
 
-	// parse the compiler arguments
-	try
-	{
-		po::command_line_parser cmdLineParser(_argc, _argv);
-		cmdLineParser.style(po::command_line_style::default_style & (~po::command_line_style::allow_guessing));
-		cmdLineParser.options(allOptions).positional(filesPositions);
-		po::store(cmdLineParser.run(), m_args);
-	}
-	catch (po::error const& _exception)
-	{
-		solThrow(CommandLineValidationError, _exception.what());
-	}
+	auto parsed = rfl::cli::read<RawArgs, SolcCli>(_argc, _argv);
+	if (!parsed)
+		solThrow(CommandLineValidationError, parsed.error().what());
 
-	po::notify(m_args);
+	m_rawArgs = std::make_unique<RawArgs>(std::move(*parsed));
+	m_providedOptions = collectProvidedOptions(*m_rawArgs);
 }
 
 void CommandLineParser::processArgs()
 {
-	if (m_args.count(g_strNoColor) > 0)
+	auto const& general = m_rawArgs->general.value();
+	auto const& input = m_rawArgs->input.value();
+	auto const& output = m_rawArgs->output.value();
+	auto const& altInput = m_rawArgs->alt_input.value();
+	auto const& assembly = m_rawArgs->assembly.value();
+	auto const& linker = m_rawArgs->linker.value();
+	auto const& formatting = m_rawArgs->formatting.value();
+	auto const& extraOutput = m_rawArgs->extra_output.value();
+	auto const& metadata = m_rawArgs->metadata.value();
+	auto const& optimizer = m_rawArgs->optimizer.value();
+	auto const& modelChecker = m_rawArgs->model_checker.value();
+	auto const& disabled = m_rawArgs->disabled.value();
+
+	if (rfl::unwrap(formatting.no_color))
 		m_options.formatting.coloredOutput = false;
-	else if (m_args.count(g_strColor) > 0)
+	else if (rfl::unwrap(formatting.color))
 		m_options.formatting.coloredOutput = true;
 
-	if (m_args.contains(g_strExperimental))
+	if (rfl::unwrap(m_rawArgs->experimental.value().experimental))
 		m_options.experimental = true;
 
 	checkMutuallyExclusive({
@@ -989,21 +822,21 @@ void CommandLineParser::processArgs()
 
 	checkExperimental(experimentalOptionNames());
 
-	if (m_args.count(g_strHelp) > 0)
+	if (rfl::unwrap(general.help))
 		m_options.input.mode = InputMode::Help;
-	else if (m_args.count(g_strLicense) > 0)
+	else if (rfl::unwrap(general.license))
 		m_options.input.mode = InputMode::License;
-	else if (m_args.count(g_strVersion) > 0)
+	else if (rfl::unwrap(general.version))
 		m_options.input.mode = InputMode::Version;
-	else if (m_args.count(g_strStandardJSON) > 0)
+	else if (rfl::unwrap(altInput.standard_json))
 		m_options.input.mode = InputMode::StandardJson;
-	else if (m_args.contains(g_strStrictAssembly))
+	else if (rfl::unwrap(altInput.strict_assembly))
 		m_options.input.mode = InputMode::Assembler;
-	else if (m_args.count(g_strLink) > 0)
+	else if (rfl::unwrap(altInput.link))
 		m_options.input.mode = InputMode::Linker;
-	else if (m_args.count(g_strImportAst) > 0)
+	else if (rfl::unwrap(altInput.import_ast))
 		m_options.input.mode = InputMode::CompilerWithASTImport;
-	else if (m_args.count(g_strImportEvmAssemblerJson) > 0)
+	else if (rfl::unwrap(altInput.import_asm_json))
 		m_options.input.mode = InputMode::EVMAssemblerJSON;
 	else
 		m_options.input.mode = InputMode::Compiler;
@@ -1023,21 +856,21 @@ void CommandLineParser::processArgs()
 			"enable experimental mode."
 		);
 
-	if (m_args.count(g_strYul) > 0)
+	if (rfl::unwrap(disabled.yul))
 		solThrow(
 			CommandLineValidationError,
 			"The typed Yul dialect formerly accessible via --yul is no longer supported, "
 			"please use --strict-assembly instead."
 		);
 
-	if (m_args.contains(g_strAssemble))
+	if (rfl::unwrap(disabled.assemble))
 		solThrow(
 			CommandLineValidationError,
 			"The assembly input mode formerly accessible via --assemble is no longer supported, "
 			"please use --strict-assembly instead."
 		);
 
-	if (m_args.contains(g_strLSP))
+	if (rfl::unwrap(disabled.lsp))
 		solThrow(
 			CommandLineValidationError,
 			"Language Server Protocol (LSP) support has been removed from solc."
@@ -1067,14 +900,8 @@ void CommandLineParser::processArgs()
 	};
 	std::vector<std::string> invalidOptionsForCurrentInputMode;
 	for (auto const& [optionName, inputModes]: validOptionInputModeCombinations)
-	{
-		if (
-			m_args.count(optionName) > 0 &&
-			inputModes.count(m_options.input.mode) == 0 &&
-			!m_args[optionName].defaulted()
-		)
+		if (m_providedOptions.contains(optionName) && inputModes.count(m_options.input.mode) == 0)
 			invalidOptionsForCurrentInputMode.push_back(optionName);
-	}
 
 	if (!invalidOptionsForCurrentInputMode.empty())
 		solThrow(
@@ -1109,8 +936,8 @@ void CommandLineParser::processArgs()
 			g_strExperimental,
 		};
 
-		for (auto const& [optionName, optionValue]: m_args)
-			if (!optionValue.defaulted() && !supportedByEvmAsmJsonImport.count(optionName))
+		for (auto const& optionName: m_providedOptions)
+			if (!supportedByEvmAsmJsonImport.count(optionName))
 				solThrow(
 					CommandLineValidationError,
 					fmt::format(
@@ -1128,36 +955,35 @@ void CommandLineParser::processArgs()
 		m_options.input.mode != InputMode::Assembler
 	)
 	{
-		if (!m_args[g_strOptimizeRuns].defaulted())
+		if (rfl::unwrap(optimizer.optimize_runs).has_value())
 			solThrow(
 				CommandLineValidationError,
 				"Option --" + g_strOptimizeRuns + " is only valid in compiler and assembler modes."
 			);
 
 		for (std::string const& option: {g_strOptimize, g_strNoOptimizeYul, g_strOptimizeYul, g_strYulOptimizations})
-			if (m_args.count(option) > 0)
+			if (m_providedOptions.contains(option))
 				solThrow(
 					CommandLineValidationError,
 					"Option --" + option + " is only valid in compiler and assembler modes."
 				);
 
-		if (!m_args[g_strDebugInfo].defaulted())
+		if (rfl::unwrap(output.debug_info).has_value())
 			solThrow(
 				CommandLineValidationError,
 				"Option --" + g_strDebugInfo + " is only valid in compiler and assembler modes."
 			);
 	}
 
-	m_options.formatting.withErrorIds = m_args.count(g_strErrorIds);
+	m_options.formatting.withErrorIds = rfl::unwrap(formatting.error_codes);
 
-	if (m_args.count(g_strRevertStrings))
+	if (auto const& revertStringsString = rfl::unwrap(output.revert_strings))
 	{
-		std::string revertStringsString = m_args[g_strRevertStrings].as<std::string>();
-		std::optional<RevertStrings> revertStrings = revertStringsFromString(revertStringsString);
+		std::optional<RevertStrings> revertStrings = revertStringsFromString(*revertStringsString);
 		if (!revertStrings)
 			solThrow(
 				CommandLineValidationError,
-				"Invalid option for --" + g_strRevertStrings + ": " + revertStringsString
+				"Invalid option for --" + g_strRevertStrings + ": " + *revertStringsString
 			);
 		if (*revertStrings == RevertStrings::VerboseDebug)
 			solThrow(
@@ -1167,12 +993,11 @@ void CommandLineParser::processArgs()
 		m_options.output.revertStrings = *revertStrings;
 	}
 
-	if (!m_args[g_strDebugInfo].defaulted())
+	if (auto const& optionValue = rfl::unwrap(output.debug_info))
 	{
-		std::string optionValue = m_args[g_strDebugInfo].as<std::string>();
-		m_options.output.debugInfoSelection = DebugInfoSelection::fromString(optionValue);
+		m_options.output.debugInfoSelection = DebugInfoSelection::fromString(*optionValue);
 		if (!m_options.output.debugInfoSelection.has_value())
-			solThrow(CommandLineValidationError, "Invalid value for --" + g_strDebugInfo + " option: " + optionValue);
+			solThrow(CommandLineValidationError, "Invalid value for --" + g_strDebugInfo + " option: " + *optionValue);
 
 		if (!m_options.experimental && m_options.output.debugInfoSelection->ethdebug)
 			solThrow(
@@ -1192,34 +1017,33 @@ void CommandLineParser::processArgs()
 
 	parseCombinedJsonOption();
 
-	if (m_args.count(g_strOutputDir))
-		m_options.output.dir = m_args.at(g_strOutputDir).as<std::string>();
+	if (auto const& outputDir = rfl::unwrap(output.output_dir))
+		m_options.output.dir = *outputDir;
 
-	m_options.output.overwriteFiles = (m_args.count(g_strOverwrite) > 0);
+	m_options.output.overwriteFiles = rfl::unwrap(output.overwrite);
 
-	if (m_args.count(g_strPrettyJson) > 0)
+	if (rfl::unwrap(formatting.pretty_json))
+		m_options.formatting.json.format = util::JsonFormat::Pretty;
+
+	if (auto const& indent = rfl::unwrap(formatting.json_indent))
 	{
 		m_options.formatting.json.format = util::JsonFormat::Pretty;
-	}
-	if (!m_args[g_strJsonIndent].defaulted())
-	{
-		m_options.formatting.json.format = util::JsonFormat::Pretty;
-		m_options.formatting.json.indent = m_args[g_strJsonIndent].as<uint32_t>();
+		m_options.formatting.json.indent = *indent;
 	}
 
 	parseOutputSelection();
 
-	m_options.compiler.estimateGas = (m_args.count(g_strGas) > 0);
+	m_options.compiler.estimateGas = rfl::unwrap(extraOutput.gas);
 
-	if (m_args.count(g_strBasePath))
-		m_options.input.basePath = m_args[g_strBasePath].as<std::string>();
+	if (auto const& basePath = rfl::unwrap(input.base_path))
+		m_options.input.basePath = *basePath;
 
-	if (m_args.count(g_strIncludePath) > 0)
+	if (auto const& includePaths = rfl::unwrap(input.include_path))
 	{
 		if (m_options.input.basePath.empty())
 			solThrow(CommandLineValidationError, "--" + g_strIncludePath + " option requires a non-empty base path.");
 
-		for (std::string const& includePath: m_args[g_strIncludePath].as<std::vector<std::string>>())
+		for (std::string const& includePath: *includePaths)
 		{
 			if (includePath.empty())
 				solThrow(CommandLineValidationError, "Empty values are not allowed in --" + g_strIncludePath + ".");
@@ -1230,20 +1054,20 @@ void CommandLineParser::processArgs()
 
 	checkMutuallyExclusive({g_strNoImportCallback, g_strAllowPaths});
 
-	if (m_args.count(g_strNoImportCallback))
+	if (rfl::unwrap(input.no_import_callback))
 		m_options.input.noImportCallback = true;
 
-	if (m_args.count(g_strAllowPaths))
+	if (auto const& allowPaths = rfl::unwrap(input.allow_paths))
 	{
 		std::vector<std::string> paths;
-		for (std::string const& allowedPath: boost::split(paths, m_args[g_strAllowPaths].as<std::string>(), boost::is_any_of(",")))
+		for (std::string const& allowedPath: boost::split(paths, *allowPaths, boost::is_any_of(",")))
 			if (!allowedPath.empty())
 				m_options.input.allowedDirectories.insert(allowedPath);
 	}
 
-	if (m_args.count(g_strStopAfter))
+	if (auto const& stopAfter = rfl::unwrap(output.stop_after))
 	{
-		if (m_args[g_strStopAfter].as<std::string>() != "parsing")
+		if (*stopAfter != "parsing")
 			solThrow(CommandLineValidationError, "Valid options for --" + g_strStopAfter + " are: \"parsing\".\n");
 		else
 			m_options.output.stopAfter = CompilerStack::State::Parsed;
@@ -1254,42 +1078,41 @@ void CommandLineParser::processArgs()
 	if (m_options.input.mode == InputMode::StandardJson)
 		return;
 
-	if (m_args.count(g_strLibraries))
-		for (std::string const& library: m_args[g_strLibraries].as<std::vector<std::string>>())
+	if (auto const& libraries = rfl::unwrap(linker.libraries))
+		for (std::string const& library: *libraries)
 			parseLibraryOption(library);
 
 	if (m_options.input.mode == InputMode::Linker)
 		return;
 
-	if (m_args.count(g_strEVMVersion))
+	if (auto const& versionOptionStr = rfl::unwrap(output.evm_version))
 	{
-		std::string versionOptionStr = m_args[g_strEVMVersion].as<std::string>();
-		std::optional<langutil::EVMVersion> versionOption = langutil::EVMVersion::fromString(versionOptionStr);
+		std::optional<langutil::EVMVersion> versionOption = langutil::EVMVersion::fromString(*versionOptionStr);
 		if (!versionOption)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strEVMVersion + ": " + versionOptionStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strEVMVersion + ": " + *versionOptionStr);
 		m_options.output.evmVersion = *versionOption;
 	}
 
-	if (m_args.count(g_strNoOptimizeYul) > 0 && m_args.count(g_strOptimizeYul) > 0)
+	bool const optEvmasm = rfl::unwrap(optimizer.optimize);
+	bool const optYul = rfl::unwrap(optimizer.optimize_yul);
+	bool const noOptYul = rfl::unwrap(optimizer.no_optimize_yul);
+	if (noOptYul && optYul)
 		solThrow(
 			CommandLineValidationError,
 			"Options --" + g_strOptimizeYul + " and --" + g_strNoOptimizeYul + " cannot be used together."
 		);
 
-	m_options.optimizer.optimizeEvmasm = (m_args.count(g_strOptimize) > 0);
-	m_options.optimizer.optimizeYul = (
-		(m_args.count(g_strOptimize) > 0 && m_args.count(g_strNoOptimizeYul) == 0) ||
-		m_args.count(g_strOptimizeYul) > 0
-	);
-	if (!m_args[g_strOptimizeRuns].defaulted())
-		m_options.optimizer.expectedExecutionsPerDeployment = m_args.at(g_strOptimizeRuns).as<OptimiserSettings::ExecutionCount>();
+	m_options.optimizer.optimizeEvmasm = optEvmasm;
+	m_options.optimizer.optimizeYul = ((optEvmasm && !noOptYul) || optYul);
+	if (auto const& runs = rfl::unwrap(optimizer.optimize_runs))
+		m_options.optimizer.expectedExecutionsPerDeployment = *runs;
 
-	if (m_args.count(g_strYulOptimizations))
+	if (auto const& yulSteps = rfl::unwrap(optimizer.yul_optimizations))
 	{
 		OptimiserSettings optimiserSettings = m_options.optimiserSettings();
 		if (
 			!optimiserSettings.runYulOptimiser &&
-			!OptimiserSuite::isEmptyOptimizerSequence(m_args[g_strYulOptimizations].as<std::string>())
+			!OptimiserSuite::isEmptyOptimizerSequence(*yulSteps)
 		)
 			solThrow(
 				CommandLineValidationError,
@@ -1299,7 +1122,7 @@ void CommandLineParser::processArgs()
 
 		try
 		{
-			yul::OptimiserSuite::validateSequence(m_args[g_strYulOptimizations].as<std::string>());
+			yul::OptimiserSuite::validateSequence(*yulSteps);
 		}
 		catch (yul::OptimizerException const& _exception)
 		{
@@ -1309,7 +1132,7 @@ void CommandLineParser::processArgs()
 			);
 		}
 
-		m_options.optimizer.yulSteps = m_args[g_strYulOptimizations].as<std::string>();
+		m_options.optimizer.yulSteps = *yulSteps;
 	}
 
 	if (m_options.input.mode == InputMode::Assembler)
@@ -1322,32 +1145,26 @@ void CommandLineParser::processArgs()
 		};
 		if (countEnabledOptions(nonAssemblyModeOptions) >= 1)
 		{
-			auto optionEnabled = [&](std::string const& name){ return m_args.count(name) > 0; };
-			auto enabledOptions = nonAssemblyModeOptions | ranges::views::filter(optionEnabled) | ranges::to_vector;
-
-			std::string message = "The following options are invalid in assembly mode: " + joinOptionNames(enabledOptions) + ".";
+			auto enabled = enabledOptions(nonAssemblyModeOptions);
+			std::string message = "The following options are invalid in assembly mode: " + joinOptionNames(enabled) + ".";
 			solThrow(CommandLineValidationError, message);
 		}
 
 		// switch to assembly mode
 		using Machine = yul::YulStack::Machine;
 
-		if (m_args.count(g_strMachine))
+		if (auto const& machine = rfl::unwrap(assembly.machine))
 		{
-			std::string machine = m_args[g_strMachine].as<std::string>();
-			if (machine == g_strEVM)
+			if (*machine == g_strEVM)
 				m_options.assembly.targetMachine = Machine::EVM;
 			else
-				solThrow(CommandLineValidationError, "Invalid option for --" + g_strMachine + ": " + machine);
+				solThrow(CommandLineValidationError, "Invalid option for --" + g_strMachine + ": " + *machine);
 		}
-		if (m_args.contains(g_strYulDialect))
-		{
-			auto const& dialect = m_args[g_strYulDialect].as<std::string>();
-			if (dialect != g_strEVM)
-				solThrow(CommandLineValidationError, "Invalid option for --" + g_strYulDialect + ": " + dialect);
-		}
+		if (auto const& dialect = rfl::unwrap(assembly.yul_dialect))
+			if (*dialect != g_strEVM)
+				solThrow(CommandLineValidationError, "Invalid option for --" + g_strYulDialect + ": " + *dialect);
 
-		m_options.output.viaSSACFG = m_args.contains(g_strViaSSACFG);
+		m_options.output.viaSSACFG = rfl::unwrap(output.via_ssa_cfg);
 
 		// Selecting an ethdebug output does not modify the debug info selection,
 		// just as --ir-optimized does not imply --optimize: the selection must
@@ -1370,23 +1187,22 @@ void CommandLineParser::processArgs()
 			"--" + g_strYulDialect + " and --" + g_strMachine + " are only valid in assembly mode."
 		);
 
-	if (m_args.count(g_strMetadataHash))
+	if (auto const& hashStr = rfl::unwrap(metadata.metadata_hash))
 	{
-		std::string hashStr = m_args[g_strMetadataHash].as<std::string>();
-		if (hashStr == g_strIPFS)
+		if (*hashStr == g_strIPFS)
 			m_options.metadata.hash = CompilerStack::MetadataHash::IPFS;
-		else if (hashStr == g_strSwarm)
+		else if (*hashStr == g_strSwarm)
 			m_options.metadata.hash = CompilerStack::MetadataHash::Bzzr1;
-		else if (hashStr == g_strNone)
+		else if (*hashStr == g_strNone)
 			m_options.metadata.hash = CompilerStack::MetadataHash::None;
 		else
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strMetadataHash + ": " + hashStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strMetadataHash + ": " + *hashStr);
 	}
 
-	if (m_args.count(g_strNoCBORMetadata))
+	if (rfl::unwrap(metadata.no_cbor_metadata))
 	{
 		if (
-			m_args.count(g_strMetadataHash) &&
+			rfl::unwrap(metadata.metadata_hash).has_value() &&
 			m_options.metadata.hash != CompilerStack::MetadataHash::None
 		)
 			solThrow(
@@ -1398,100 +1214,84 @@ void CommandLineParser::processArgs()
 		m_options.metadata.format = CompilerStack::MetadataFormat::NoMetadata;
 	}
 
-	if (m_args.count(g_strModelCheckerContracts))
+	if (auto const& contractsStr = rfl::unwrap(modelChecker.model_checker_contracts))
 	{
-		std::string contractsStr = m_args[g_strModelCheckerContracts].as<std::string>();
-		std::optional<ModelCheckerContracts> contracts = ModelCheckerContracts::fromString(contractsStr);
+		std::optional<ModelCheckerContracts> contracts = ModelCheckerContracts::fromString(*contractsStr);
 		if (!contracts)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerContracts + ": " + contractsStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerContracts + ": " + *contractsStr);
 		m_options.modelChecker.settings.contracts = std::move(*contracts);
 	}
 
-	if (m_args.count(g_strModelCheckerDivModNoSlacks))
+	if (rfl::unwrap(modelChecker.model_checker_div_mod_no_slacks))
 		m_options.modelChecker.settings.divModNoSlacks = true;
 
-	if (m_args.count(g_strModelCheckerEngine))
+	if (auto const& engineStr = rfl::unwrap(modelChecker.model_checker_engine))
 	{
-		std::string engineStr = m_args[g_strModelCheckerEngine].as<std::string>();
-		std::optional<ModelCheckerEngine> engine = ModelCheckerEngine::fromString(engineStr);
+		std::optional<ModelCheckerEngine> engine = ModelCheckerEngine::fromString(*engineStr);
 		if (!engine)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerEngine + ": " + engineStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerEngine + ": " + *engineStr);
 		m_options.modelChecker.settings.engine = *engine;
 	}
 
-	if (m_args.count(g_strModelCheckerExtCalls))
+	if (auto const& mode = rfl::unwrap(modelChecker.model_checker_ext_calls))
 	{
-		std::string mode = m_args[g_strModelCheckerExtCalls].as<std::string>();
-		std::optional<ModelCheckerExtCalls> extCallsMode = ModelCheckerExtCalls::fromString(mode);
+		std::optional<ModelCheckerExtCalls> extCallsMode = ModelCheckerExtCalls::fromString(*mode);
 		if (!extCallsMode)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerExtCalls + ": " + mode);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerExtCalls + ": " + *mode);
 		m_options.modelChecker.settings.externalCalls = *extCallsMode;
 	}
 
-	if (m_args.count(g_strModelCheckerInvariants))
+	if (auto const& invsStr = rfl::unwrap(modelChecker.model_checker_invariants))
 	{
-		std::string invsStr = m_args[g_strModelCheckerInvariants].as<std::string>();
-		std::optional<ModelCheckerInvariants> invs = ModelCheckerInvariants::fromString(invsStr);
+		std::optional<ModelCheckerInvariants> invs = ModelCheckerInvariants::fromString(*invsStr);
 		if (!invs)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerInvariants + ": " + invsStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerInvariants + ": " + *invsStr);
 		m_options.modelChecker.settings.invariants = *invs;
 	}
 
-	if (m_args.count(g_strModelCheckerShowProvedSafe))
+	if (rfl::unwrap(modelChecker.model_checker_show_proved_safe))
 		m_options.modelChecker.settings.showProvedSafe = true;
 
-	if (m_args.count(g_strModelCheckerShowUnproved))
+	if (rfl::unwrap(modelChecker.model_checker_show_unproved))
 		m_options.modelChecker.settings.showUnproved = true;
 
-	if (m_args.count(g_strModelCheckerShowUnsupported))
+	if (rfl::unwrap(modelChecker.model_checker_show_unsupported))
 		m_options.modelChecker.settings.showUnsupported = true;
 
-	if (m_args.count(g_strModelCheckerSolvers))
+	if (auto const& solversStr = rfl::unwrap(modelChecker.model_checker_solvers))
 	{
-		std::string solversStr = m_args[g_strModelCheckerSolvers].as<std::string>();
-		std::optional<smtutil::SMTSolverChoice> solvers = smtutil::SMTSolverChoice::fromString(solversStr);
+		std::optional<smtutil::SMTSolverChoice> solvers = smtutil::SMTSolverChoice::fromString(*solversStr);
 		if (!solvers)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerSolvers + ": " + solversStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerSolvers + ": " + *solversStr);
 		m_options.modelChecker.settings.solvers = *solvers;
 	}
 
-	if (m_args.count(g_strModelCheckerPrintQuery))
+	if (rfl::unwrap(modelChecker.model_checker_print_query))
 		m_options.modelChecker.settings.printQuery = true;
 
-	if (m_args.count(g_strModelCheckerTargets))
+	if (auto const& targetsStr = rfl::unwrap(modelChecker.model_checker_targets))
 	{
-		std::string targetsStr = m_args[g_strModelCheckerTargets].as<std::string>();
-		std::optional<ModelCheckerTargets> targets = ModelCheckerTargets::fromString(targetsStr);
+		std::optional<ModelCheckerTargets> targets = ModelCheckerTargets::fromString(*targetsStr);
 		if (!targets)
-			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerTargets + ": " + targetsStr);
+			solThrow(CommandLineValidationError, "Invalid option for --" + g_strModelCheckerTargets + ": " + *targetsStr);
 		m_options.modelChecker.settings.targets = *targets;
 	}
 
-	if (m_args.count(g_strModelCheckerTimeout))
-		m_options.modelChecker.settings.timeout = m_args[g_strModelCheckerTimeout].as<unsigned>();
+	if (auto const& timeout = rfl::unwrap(modelChecker.model_checker_timeout))
+		m_options.modelChecker.settings.timeout = *timeout;
 
-	if (m_args.count(g_strModelCheckerBMCLoopIterations))
+	if (auto const& loopIterations = rfl::unwrap(modelChecker.model_checker_bmc_loop_iterations))
 	{
 		if (!m_options.modelChecker.settings.engine.bmc)
 			solThrow(CommandLineValidationError, "BMC loop unrolling requires the BMC engine to be enabled");
-		m_options.modelChecker.settings.bmcLoopIterations = m_args[g_strModelCheckerBMCLoopIterations].as<unsigned>();
+		m_options.modelChecker.settings.bmcLoopIterations = *loopIterations;
 	}
 
-	m_options.metadata.literalSources = (m_args.count(g_strMetadataLiteral) > 0);
-	m_options.modelChecker.initialize =
-		m_args.count(g_strModelCheckerContracts) ||
-		m_args.count(g_strModelCheckerDivModNoSlacks) ||
-		m_args.count(g_strModelCheckerEngine) ||
-		m_args.count(g_strModelCheckerExtCalls) ||
-		m_args.count(g_strModelCheckerInvariants) ||
-		m_args.count(g_strModelCheckerShowProvedSafe) ||
-		m_args.count(g_strModelCheckerShowUnproved) ||
-		m_args.count(g_strModelCheckerShowUnsupported) ||
-		m_args.count(g_strModelCheckerSolvers) ||
-		m_args.count(g_strModelCheckerTargets) ||
-		m_args.count(g_strModelCheckerTimeout);
-	m_options.output.viaIR = (m_args.count(g_strExperimentalViaIR) > 0 || m_args.count(g_strViaIR) > 0);
-	m_options.output.viaSSACFG = m_args.contains(g_strViaSSACFG);
+	m_options.metadata.literalSources = rfl::unwrap(metadata.metadata_literal);
+	// In compiler / AST import / EVM assembler JSON modes, modelChecker defaults are always active.
+	m_options.modelChecker.initialize = true;
+	m_options.output.viaIR = (rfl::unwrap(output.experimental_via_ir) || rfl::unwrap(output.via_ir));
+	m_options.output.viaSSACFG = rfl::unwrap(output.via_ssa_cfg);
 	if (m_options.output.viaSSACFG)
 		m_options.output.viaIR = true;
 
@@ -1538,11 +1338,12 @@ void CommandLineParser::processArgs()
 
 void CommandLineParser::parseCombinedJsonOption()
 {
-	if (!m_args.count(g_strCombinedJson))
+	auto const& combinedJson = rfl::unwrap(m_rawArgs->extra_output.value().combined_json);
+	if (!combinedJson.has_value())
 		return;
 
 	std::set<std::string> requests;
-	for (std::string const& item: boost::split(requests, m_args[g_strCombinedJson].as<std::string>(), boost::is_any_of(",")))
+	for (std::string const& item: boost::split(requests, *combinedJson, boost::is_any_of(",")))
 		if (CombinedJsonRequests::componentMap().count(item) == 0)
 			solThrow(CommandLineValidationError, "Invalid option to --" + g_strCombinedJson + ": " + item);
 
@@ -1584,7 +1385,7 @@ size_t CommandLineParser::countEnabledOptions(std::vector<std::string> const& _o
 {
 	size_t count = 0;
 	for (std::string const& _option: _optionNames)
-		count += m_args.count(_option);
+		count += m_providedOptions.count(_option);
 
 	return count;
 }

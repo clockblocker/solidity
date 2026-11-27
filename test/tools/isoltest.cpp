@@ -44,7 +44,6 @@ using namespace solidity::frontend;
 using namespace solidity::frontend::test;
 using namespace solidity::util::formatting;
 
-namespace po = boost::program_options;
 namespace fs = boost::filesystem;
 
 using TestCreator = TestCase::TestCaseCreator;
@@ -481,11 +480,6 @@ int main(int argc, char const *argv[])
 			std::cout << "\nNOTE: Skipped semantics tests.\n" << std::endl;
 
 		return global_stats ? EXIT_SUCCESS : EXIT_FAILURE;
-	}
-	catch (boost::program_options::error const& exception)
-	{
-		std::cerr << exception.what() << std::endl;
-		return 2;
 	}
 	catch (std::runtime_error const& exception)
 	{

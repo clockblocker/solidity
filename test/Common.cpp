@@ -17,6 +17,7 @@
 // SPDX-License-Identifier: GPL-3.0
 
 #include <test/Common.h>
+#include <test/CommonCli.h>
 
 #include <test/EVMHost.h>
 #include <test/libsolidity/util/SoltestErrors.h>
@@ -28,7 +29,6 @@
 
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
-#include <boost/program_options.hpp>
 
 #include <range/v3/all.hpp>
 
@@ -36,7 +36,6 @@
 #include <stdexcept>
 
 namespace fs = boost::filesystem;
-namespace po = boost::program_options;
 
 namespace solidity::test
 {
@@ -99,30 +98,69 @@ std::optional<fs::path> findInDefaultPath(std::string const& lib_name)
 }
 
 CommonOptions::CommonOptions(std::string _caption):
-	options(_caption,
-		po::options_description::m_default_line_length,
-		po::options_description::m_default_line_length - 23
-	)
+	caption(std::move(_caption))
 {
-
 }
 
-void CommonOptions::addOptions()
+void CommonOptions::applyCommonCliArgs(
+	std::optional<std::string> const& _evmVersion,
+	std::optional<std::string> const& _testPath,
+	std::optional<std::vector<std::string>> const& _vmPaths,
+	size_t _batches,
+	size_t _selectedBatch,
+	bool _noSemanticTests,
+	bool _noSmt,
+	bool _optimize,
+	bool _enforceGasCost,
+	std::optional<std::string> const& _enforceGasCostMinValue,
+	bool _abiEncoderV1,
+	bool _showMessages,
+	bool _showMetadata,
+	std::optional<std::vector<std::string>> const& _positionals
+)
 {
-	options.add_options()
-		("evm-version", po::value(&evmVersionString), "which EVM version to use")
-		("testpath", po::value<fs::path>(&this->testPath)->default_value(solidity::test::testPath()), "path to test files")
-		("vm", po::value<std::vector<fs::path>>(&vmPaths), "path to evmc library, can be supplied multiple times.")
-		("batches", po::value<size_t>(&this->batches)->default_value(1), "set number of batches to split the tests into")
-		("selected-batch", po::value<size_t>(&this->selectedBatch)->default_value(0), "zero-based number of batch to execute")
-		("no-semantic-tests", po::bool_switch(&disableSemanticTests)->default_value(disableSemanticTests), "disable semantic tests")
-		("no-smt", po::bool_switch(&disableSMT)->default_value(disableSMT), "disable SMT checker")
-		("optimize", po::bool_switch(&optimize)->default_value(optimize), "enables optimization")
-		("enforce-gas-cost", po::value<bool>(&enforceGasTest)->default_value(enforceGasTest)->implicit_value(true), "Enforce checking gas cost in semantic tests.")
-		("enforce-gas-cost-min-value", po::value(&enforceGasTestMinValue)->default_value(enforceGasTestMinValue), "Threshold value to enforce adding gas checks to a test.")
-		("abiencoderv1", po::bool_switch(&useABIEncoderV1)->default_value(useABIEncoderV1), "enables abi encoder v1")
-		("show-messages", po::bool_switch(&showMessages)->default_value(showMessages), "enables message output")
-		("show-metadata", po::bool_switch(&showMetadata)->default_value(showMetadata), "enables metadata output");
+	if (_positionals)
+		for (auto const& token: *_positionals)
+			if (!token.empty())
+				BOOST_THROW_EXCEPTION(std::runtime_error("Unrecognized option: " + token));
+
+	if (_evmVersion)
+		evmVersionString = *_evmVersion;
+	testPath = _testPath ? fs::path(*_testPath) : solidity::test::testPath();
+	vmPaths.clear();
+	if (_vmPaths)
+		for (auto const& p: *_vmPaths)
+			vmPaths.emplace_back(p);
+	batches = _batches;
+	selectedBatch = _selectedBatch;
+	disableSemanticTests = _noSemanticTests;
+	disableSMT = _noSmt;
+	optimize = _optimize;
+	enforceGasTest = _enforceGasCost;
+	if (_enforceGasCostMinValue)
+	{
+		try
+		{
+			enforceGasTestMinValue = u256(*_enforceGasCostMinValue);
+		}
+		catch (std::exception const& _e)
+		{
+			solThrow(ConfigException, std::string("Invalid value for --enforce-gas-cost-min-value: ") + _e.what());
+		}
+	}
+	useABIEncoderV1 = _abiEncoderV1;
+	showMessages = _showMessages;
+	showMetadata = _showMetadata;
+
+	if (vmPaths.empty())
+	{
+		if (auto envPath = getenv("ETH_EVMONE"))
+			vmPaths.emplace_back(envPath);
+		else if (auto repoPath = findInDefaultPath(evmoneFilename))
+			vmPaths.emplace_back(*repoPath);
+		else
+			vmPaths.emplace_back(evmoneFilename);
+	}
 }
 
 void CommonOptions::validate() const
@@ -163,47 +201,33 @@ void CommonOptions::validate() const
 
 bool CommonOptions::parse(int argc, char const* const* argv)
 {
-	po::variables_map arguments;
-	addOptions();
-
-	try
+	struct FullCommonArgs
 	{
-		po::command_line_parser cmdLineParser(argc, argv);
-		cmdLineParser.options(options);
-		auto parsedOptions = cmdLineParser.run();
-		po::store(parsedOptions, arguments);
-		po::notify(arguments);
+		rfl::Flatten<CommonCliArgs> common;
+		rfl::Hidden<rfl::Positional<std::optional<std::vector<std::string>>>> positional;
+	};
 
-		for (auto const& parsedOption: parsedOptions.options)
-			if (parsedOption.position_key >= 0)
-			{
-				if (
-					parsedOption.original_tokens.empty() ||
-					(parsedOption.original_tokens.size() == 1 && parsedOption.original_tokens.front().empty())
-				)
-					continue; // ignore empty options
-				std::stringstream errorMessage;
-				errorMessage << "Unrecognized option: ";
-				for (auto const& token: parsedOption.original_tokens)
-					errorMessage << token;
-				BOOST_THROW_EXCEPTION(std::runtime_error(errorMessage.str()));
-			}
-	}
-	catch (po::error const& exception)
-	{
-		solThrow(ConfigException, exception.what());
-	}
+	auto parsed = rfl::cli::read<FullCommonArgs, TestCliProcessors>(argc, argv);
+	if (!parsed)
+		solThrow(ConfigException, parsed.error().what());
 
-	if (vmPaths.empty())
-	{
-		if (auto envPath = getenv("ETH_EVMONE"))
-			vmPaths.emplace_back(envPath);
-		else if (auto repoPath = findInDefaultPath(evmoneFilename))
-			vmPaths.emplace_back(*repoPath);
-		else
-			vmPaths.emplace_back(evmoneFilename);
-	}
-
+	auto const& c = parsed->common.value();
+	applyCommonCliArgs(
+		rfl::unwrap(c.evm_version),
+		rfl::unwrap(c.testpath),
+		rfl::unwrap(c.vm),
+		rfl::unwrap(c.batches),
+		rfl::unwrap(c.selected_batch),
+		rfl::unwrap(c.no_semantic_tests),
+		rfl::unwrap(c.no_smt),
+		rfl::unwrap(c.optimize),
+		rfl::unwrap(c.enforce_gas_cost),
+		rfl::unwrap(c.enforce_gas_cost_min_value),
+		rfl::unwrap(c.abiencoderv1),
+		rfl::unwrap(c.show_messages),
+		rfl::unwrap(c.show_metadata),
+		rfl::unwrap(parsed->positional)
+	);
 	return true;
 }
 
