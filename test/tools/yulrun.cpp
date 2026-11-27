@@ -103,17 +103,15 @@ int main(int argc, char** argv)
 {
 	struct YulRunArgs
 	{
-		rfl::Description<"Enable external calls", rfl::DefaultVal<bool>> enable_external_calls = false;
-		rfl::Description<"Run interactive", rfl::DefaultVal<bool>> interactive = false;
-		rfl::Description<"Calldata as hex string", std::optional<std::string>> calldata;
-		rfl::Positional<rfl::Description<"input file", std::optional<std::vector<std::string>>>> input_file;
+		rfl::cli::Flag<rfl::cli::attr::Desc<"Enable external calls">> enable_external_calls = false;
+		rfl::cli::Flag<rfl::cli::attr::Desc<"Run interactive">> interactive = false;
+		rfl::cli::Arg<std::optional<std::string>, rfl::cli::attr::Desc<"Calldata as hex string">> calldata;
+		rfl::cli::Arg<std::optional<std::vector<std::string>>, rfl::cli::attr::Positional, rfl::cli::attr::Desc<"input file">> input_file;
 	};
 	using YulRunCli = rfl::Processors<
 		rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::long_only>,
-		rfl::NoExtraFields,
-		rfl::cli::SeparateOptionValues,
-		rfl::cli::ListDelimiter<"">,
-		rfl::cli::PureFlags
+		rfl::cli::GnuStyle,
+		rfl::cli::ListDelimiter<"">
 	>;
 	rfl::cli::UsageOptions const usageOpts{
 		.detailed = true,

@@ -97,19 +97,21 @@ Enum parseChoice(std::string const& _value, std::map<std::string, Enum> const& _
 	return it->second;
 }
 
-template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T>
-using PhaserOpt = rfl::Group<G, rfl::ValueName<VN, rfl::Description<Desc, T>>>;
+template <rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T>
+using PhaserOpt = rfl::cli::Arg<T, rfl::cli::attr::ValueName<VN>, rfl::cli::attr::Desc<Desc>>;
 
-template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral Desc>
-using PhaserFlag = rfl::Group<G, rfl::Description<Desc, rfl::DefaultVal<bool>>>;
+template <rfl::internal::StringLiteral Desc>
+using PhaserFlag = rfl::cli::Flag<rfl::cli::attr::Desc<Desc>>;
 
 template <rfl::internal::StringLiteral VN>
-using WeightOpt = rfl::Group<"METRIC WEIGHTS", rfl::ValueName<VN, rfl::DefaultVal<size_t>>>;
+using WeightOpt = rfl::cli::Arg<size_t, rfl::cli::attr::ValueName<VN>>;
 
 struct GeneralArgs
 {
-	rfl::Positional<PhaserOpt<"GENERAL", "<PATH>", "Input files.", std::optional<std::vector<std::string>>>> input_files;
-	PhaserOpt<"GENERAL", "<CHROMOSOME>",
+	rfl::cli::Arg<std::optional<std::vector<std::string>>,
+		rfl::cli::attr::Positional, rfl::cli::attr::ValueName<"<PATH>">,
+		rfl::cli::attr::Desc<"Input files.">> input_files;
+	PhaserOpt<"<CHROMOSOME>",
 		"Initial optimisation steps automatically applied to every input program.\n"
 		"The result is treated as if it was the actual input, i.e. the steps are not considered "
 		"a part of the chromosomes and cannot be mutated. The values of relative metric values "
@@ -118,71 +120,72 @@ struct GeneralArgs
 		"Note that phaser always adds a 'hgo' prefix to ensure that chromosomes can "
 		"contain arbitrary optimisation steps. This implicit prefix cannot be changed or "
 		"removed using this option. The value given here is applied after it.",
-		rfl::DefaultVal<std::string>> prefix = "";
-	PhaserOpt<"GENERAL", "<NUM>", "Seed for the random number generator.", std::optional<uint32_t>> seed;
-	PhaserOpt<"GENERAL", "<NUM>", "The number of rounds after which the algorithm should stop. (default=no limit).", std::optional<size_t>> rounds;
-	PhaserOpt<"GENERAL", "<NAME>",
+		std::string> prefix = "";
+	PhaserOpt<"<NUM>", "Seed for the random number generator.", std::optional<uint32_t>> seed;
+	PhaserOpt<"<NUM>", "The number of rounds after which the algorithm should stop. (default=no limit).", std::optional<size_t>> rounds;
+	PhaserOpt<"<NAME>",
 		"Mode of operation (run-algorithm, print-optimised-programs, print-optimised-asts).",
-		rfl::DefaultVal<std::string>> mode = "run-algorithm";
+		std::string> mode = "run-algorithm";
 };
 
 struct AlgorithmArgs
 {
-	PhaserOpt<"ALGORITHM", "<NAME>", "Algorithm (GEWEP, classic, random).", rfl::DefaultVal<std::string>> algorithm = "GEWEP";
-	PhaserFlag<"ALGORITHM",
+	PhaserOpt<"<NAME>", "Algorithm (GEWEP, classic, random).", std::string> algorithm = "GEWEP";
+	PhaserFlag<
 		"By default, after each round of the algorithm duplicate chromosomes are removed from "
 		"the population and replaced with randomly generated ones. "
 		"This option disables this postprocessing."> no_randomise_duplicates = false;
-	PhaserOpt<"ALGORITHM", "<NUM>", "Minimum length of randomly generated chromosomes.", rfl::DefaultVal<size_t>> min_chromosome_length = 100;
-	PhaserOpt<"ALGORITHM", "<NUM>", "Maximum length of randomly generated chromosomes.", rfl::DefaultVal<size_t>> max_chromosome_length = 100;
-	PhaserOpt<"ALGORITHM", "<NAME>", "Type of the crossover operator to use (single-point, two-point, uniform).", rfl::DefaultVal<std::string>> crossover = "uniform";
-	PhaserOpt<"ALGORITHM", "<PROBABILITY>", "Chance of two genes being swapped between chromosomes in uniform crossover.", rfl::DefaultVal<double>> uniform_crossover_swap_chance = 0.5;
+	PhaserOpt<"<NUM>", "Minimum length of randomly generated chromosomes.", size_t> min_chromosome_length = 100;
+	PhaserOpt<"<NUM>", "Maximum length of randomly generated chromosomes.", size_t> max_chromosome_length = 100;
+	PhaserOpt<"<NAME>", "Type of the crossover operator to use (single-point, two-point, uniform).", std::string> crossover = "uniform";
+	PhaserOpt<"<PROBABILITY>", "Chance of two genes being swapped between chromosomes in uniform crossover.", double> uniform_crossover_swap_chance = 0.5;
 };
 
 struct GewepArgs
 {
-	PhaserOpt<"GEWEP ALGORITHM", "<FRACTION>", "Percentage of population to regenerate using mutations in each round.", rfl::DefaultVal<double>> gewep_mutation_pool_size = 0.25;
-	PhaserOpt<"GEWEP ALGORITHM", "<FRACTION>", "Percentage of population to regenerate using crossover in each round.", rfl::DefaultVal<double>> gewep_crossover_pool_size = 0.25;
-	PhaserOpt<"GEWEP ALGORITHM", "<PROBABILITY>", "The chance of choosing gene randomisation as the mutation to perform.", rfl::DefaultVal<double>> gewep_randomisation_chance = 0.9;
-	PhaserOpt<"GEWEP ALGORITHM", "<PROBABILITY>", "The chance of choosing gene deletion as the mutation if randomisation was not chosen.", rfl::DefaultVal<double>> gewep_deletion_vs_addition_chance = 0.5;
-	PhaserOpt<"GEWEP ALGORITHM", "<PROBABILITY>", "The chance of any given gene being mutated in gene randomisation. (default=1/max-chromosome-length)", std::optional<double>> gewep_genes_to_randomise;
-	PhaserOpt<"GEWEP ALGORITHM", "<PROBABILITY>", "The chance of a gene being added (or deleted) in gene addition (or deletion). (default=1/max-chromosome-length)", std::optional<double>> gewep_genes_to_add_or_delete;
+	PhaserOpt<"<FRACTION>", "Percentage of population to regenerate using mutations in each round.", double> gewep_mutation_pool_size = 0.25;
+	PhaserOpt<"<FRACTION>", "Percentage of population to regenerate using crossover in each round.", double> gewep_crossover_pool_size = 0.25;
+	PhaserOpt<"<PROBABILITY>", "The chance of choosing gene randomisation as the mutation to perform.", double> gewep_randomisation_chance = 0.9;
+	PhaserOpt<"<PROBABILITY>", "The chance of choosing gene deletion as the mutation if randomisation was not chosen.", double> gewep_deletion_vs_addition_chance = 0.5;
+	PhaserOpt<"<PROBABILITY>", "The chance of any given gene being mutated in gene randomisation. (default=1/max-chromosome-length)", std::optional<double>> gewep_genes_to_randomise;
+	PhaserOpt<"<PROBABILITY>", "The chance of a gene being added (or deleted) in gene addition (or deletion). (default=1/max-chromosome-length)", std::optional<double>> gewep_genes_to_add_or_delete;
 };
 
 struct ClassicArgs
 {
-	PhaserOpt<"CLASSIC GENETIC ALGORITHM", "<FRACTION>", "Percentage of population to regenerate using mutations in each round.", rfl::DefaultVal<double>> classic_elite_pool_size = 0.25;
-	PhaserOpt<"CLASSIC GENETIC ALGORITHM", "<FRACTION>", "Chance of a chromosome being selected for crossover.", rfl::DefaultVal<double>> classic_crossover_chance = 0.75;
-	PhaserOpt<"CLASSIC GENETIC ALGORITHM", "<FRACTION>", "Chance of a gene being mutated.", rfl::DefaultVal<double>> classic_mutation_chance = 0.01;
-	PhaserOpt<"CLASSIC GENETIC ALGORITHM", "<PROBABILITY>", "Chance of a gene being deleted.", rfl::DefaultVal<double>> classic_deletion_chance = 0.01;
-	PhaserOpt<"CLASSIC GENETIC ALGORITHM", "<PROBABILITY>", "Chance of a random gene being added.", rfl::DefaultVal<double>> classic_addition_chance = 0.01;
+	PhaserOpt<"<FRACTION>", "Percentage of population to regenerate using mutations in each round.", double> classic_elite_pool_size = 0.25;
+	PhaserOpt<"<FRACTION>", "Chance of a chromosome being selected for crossover.", double> classic_crossover_chance = 0.75;
+	PhaserOpt<"<FRACTION>", "Chance of a gene being mutated.", double> classic_mutation_chance = 0.01;
+	PhaserOpt<"<PROBABILITY>", "Chance of a gene being deleted.", double> classic_deletion_chance = 0.01;
+	PhaserOpt<"<PROBABILITY>", "Chance of a random gene being added.", double> classic_addition_chance = 0.01;
 };
 
 struct RandomArgs
 {
-	PhaserOpt<"RANDOM ALGORITHM", "<FRACTION>",
+	PhaserOpt<"<FRACTION>",
 		"Percentage of the population preserved in each round. (default=one individual, regardless of population size)",
 		std::optional<double>> random_elite_pool_size;
 };
 
 struct PopulationArgs
 {
-	rfl::MultiToken<PhaserOpt<"POPULATION", "<CHROMOSOMES>",
-		"List of chromosomes to be included in the initial population. "
-		"You can specify multiple values separated with spaces or invoke the option multiple times "
-		"and all the values will be included.",
-		std::optional<std::vector<std::string>>>> population;
-	PhaserOpt<"POPULATION", "<SIZE>", "The number of randomly generated chromosomes to be included in the initial population.", std::optional<std::vector<size_t>>> random_population;
-	PhaserOpt<"POPULATION", "<FILE>", "A text file with a list of chromosomes (one per line) to be included in the initial population.", std::optional<std::vector<std::string>>> population_from_file;
-	PhaserOpt<"POPULATION", "<FILE>", "If specified, the population is saved in the specified file after each round. (default=autosave disabled)", std::optional<std::string>> population_autosave;
+	rfl::cli::Arg<std::optional<std::vector<std::string>>,
+		rfl::cli::attr::MultiToken, rfl::cli::attr::ValueName<"<CHROMOSOMES>">,
+		rfl::cli::attr::Desc<
+			"List of chromosomes to be included in the initial population. "
+			"You can specify multiple values separated with spaces or invoke the option multiple times "
+			"and all the values will be included.">> population;
+	PhaserOpt<"<SIZE>", "The number of randomly generated chromosomes to be included in the initial population.", std::optional<std::vector<size_t>>> random_population;
+	PhaserOpt<"<FILE>", "A text file with a list of chromosomes (one per line) to be included in the initial population.", std::optional<std::vector<std::string>>> population_from_file;
+	PhaserOpt<"<FILE>", "If specified, the population is saved in the specified file after each round. (default=autosave disabled)", std::optional<std::string>> population_autosave;
 };
 
 struct MetricsArgs
 {
-	PhaserOpt<"METRICS", "<NAME>", "Metric used to evaluate the fitness of a chromosome (code-size, relative-code-size).", rfl::DefaultVal<std::string>> metric = "relative-code-size";
-	PhaserOpt<"METRICS", "<NAME>", "Operator used to combine multiple fitness metric values (average, sum, maximum, minimum).", rfl::DefaultVal<std::string>> metric_aggregator = "average";
-	PhaserOpt<"METRICS", "<EXPONENT>", "Scaling factor for values produced by relative fitness metrics.", rfl::DefaultVal<size_t>> relative_metric_scale = 3;
-	PhaserOpt<"METRICS", "<COUNT>", "Number of times to repeat the sequence optimisation steps represented by a chromosome.", rfl::DefaultVal<size_t>> chromosome_repetitions = 1;
+	PhaserOpt<"<NAME>", "Metric used to evaluate the fitness of a chromosome (code-size, relative-code-size).", std::string> metric = "relative-code-size";
+	PhaserOpt<"<NAME>", "Operator used to combine multiple fitness metric values (average, sum, maximum, minimum).", std::string> metric_aggregator = "average";
+	PhaserOpt<"<EXPONENT>", "Scaling factor for values produced by relative fitness metrics.", size_t> relative_metric_scale = 3;
+	PhaserOpt<"<COUNT>", "Number of times to repeat the sequence optimisation steps represented by a chromosome.", size_t> chromosome_repetitions = 1;
 };
 
 struct MetricWeightArgs
@@ -206,20 +209,19 @@ struct MetricWeightArgs
 
 struct CacheAndOutputArgs
 {
-	PhaserFlag<"CACHE", "Enables caching of intermediate programs corresponding to chromosome prefixes."> program_cache = false;
-	PhaserFlag<"OUTPUT", "Print the state of the population before the algorithm starts."> show_initial_population = false;
-	PhaserFlag<"OUTPUT", "Print only the best chromosome found in each round rather than the whole population."> show_only_top_chromosome = false;
-	PhaserFlag<"OUTPUT", "Hide information about the current round (round number and elapsed time)."> hide_round = false;
-	PhaserFlag<"OUTPUT", "Print information about cache size and effectiveness after each round."> show_cache_stats = false;
-	PhaserFlag<"OUTPUT", "Print the selected random seed."> show_seed = false;
+	rfl::cli::Flag<rfl::cli::attr::Group<"CACHE">,
+		rfl::cli::attr::Desc<"Enables caching of intermediate programs corresponding to chromosome prefixes.">> program_cache = false;
+	PhaserFlag<"Print the state of the population before the algorithm starts."> show_initial_population = false;
+	PhaserFlag<"Print only the best chromosome found in each round rather than the whole population."> show_only_top_chromosome = false;
+	PhaserFlag<"Hide information about the current round (round number and elapsed time)."> hide_round = false;
+	PhaserFlag<"Print information about cache size and effectiveness after each round."> show_cache_stats = false;
+	PhaserFlag<"Print the selected random seed."> show_seed = false;
 };
 
 using PhaserCli = rfl::Processors<
 	rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::long_only>,
-	rfl::NoExtraFields,
-	rfl::cli::SeparateOptionValues,
-	rfl::cli::ListDelimiter<"">,
-	rfl::cli::PureFlags
+	rfl::cli::GnuStyle,
+	rfl::cli::ListDelimiter<"">
 >;
 
 } // namespace
@@ -229,15 +231,15 @@ namespace solidity::phaser
 
 struct PhaserCommandLineArgs
 {
-	rfl::Flatten<GeneralArgs> general;
-	rfl::Flatten<AlgorithmArgs> algorithm;
-	rfl::Flatten<GewepArgs> gewep;
-	rfl::Flatten<ClassicArgs> classic;
-	rfl::Flatten<RandomArgs> random;
-	rfl::Flatten<PopulationArgs> population;
-	rfl::Flatten<MetricsArgs> metrics;
-	rfl::Flatten<MetricWeightArgs> weights;
-	rfl::Flatten<CacheAndOutputArgs> cache_output;
+	rfl::cli::OptGroup<"GENERAL", GeneralArgs> general;
+	rfl::cli::OptGroup<"ALGORITHM", AlgorithmArgs> algorithm;
+	rfl::cli::OptGroup<"GEWEP ALGORITHM", GewepArgs> gewep;
+	rfl::cli::OptGroup<"CLASSIC GENETIC ALGORITHM", ClassicArgs> classic;
+	rfl::cli::OptGroup<"RANDOM ALGORITHM", RandomArgs> random;
+	rfl::cli::OptGroup<"POPULATION", PopulationArgs> population;
+	rfl::cli::OptGroup<"METRICS", MetricsArgs> metrics;
+	rfl::cli::OptGroup<"METRIC WEIGHTS", MetricWeightArgs> weights;
+	rfl::cli::OptGroup<"OUTPUT", CacheAndOutputArgs> cache_output;
 };
 
 } // namespace solidity::phaser

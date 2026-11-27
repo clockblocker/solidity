@@ -111,92 +111,88 @@ static std::map<InputMode, std::string> const g_inputModeName = {
 namespace
 {
 
-using Flag = rfl::DefaultVal<bool>;
 using OptStr = std::optional<std::string>;
 using OptStrVec = std::optional<std::vector<std::string>>;
 
-template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral Desc>
-using GroupFlag = rfl::cli::Opt<Flag, rfl::cli::attr::Group<G>, rfl::cli::attr::Desc<Desc>>;
-
-template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T = OptStr>
-using GroupOpt = rfl::cli::Opt<T, rfl::cli::attr::Group<G>, rfl::cli::attr::ValueName<VN>, rfl::cli::attr::Desc<Desc>>;
-
 template <rfl::internal::StringLiteral Desc>
-using OutCompFlag = GroupFlag<"Output Components", Desc>;
+using OptFlag = rfl::cli::Flag<rfl::cli::attr::Desc<Desc>>;
+
+template <rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T = OptStr>
+using OptArg = rfl::cli::Arg<T, rfl::cli::attr::ValueName<VN>, rfl::cli::attr::Desc<Desc>>;
 
 struct GeneralInfoArgs
 {
-	GroupFlag<"General Information", "Show help message and exit."> help = false;
-	GroupFlag<"General Information", "Show version and exit."> version = false;
-	GroupFlag<"General Information", "Show licensing information and exit."> license = false;
-	rfl::cli::Opt<OptStrVec, rfl::cli::attr::Positional, rfl::cli::attr::Group<"General Information">,
+	OptFlag<"Show help message and exit."> help = false;
+	OptFlag<"Show version and exit."> version = false;
+	OptFlag<"Show licensing information and exit."> license = false;
+	rfl::cli::Arg<OptStrVec, rfl::cli::attr::Positional,
 		rfl::cli::attr::ValueName<"arg">, rfl::cli::attr::Desc<"input file">> input_file;
 };
 
 struct InputArgs
 {
-	GroupOpt<"Input Options", "path",
+	OptArg<"path",
 		"Use the given path as the root of the source tree instead of the root of the filesystem."> base_path;
-	GroupOpt<"Input Options", "path",
+	OptArg<"path",
 		"Make an additional source directory available to the default import callback. "
 		"Use this option if you want to import contracts whose location is not fixed in relation "
 		"to your main source tree, e.g. third-party libraries installed using a package manager. "
 		"Can be used multiple times. "
 		"Can only be used if base path has a non-empty value.",
 		OptStrVec> include_path;
-	GroupOpt<"Input Options", "path(s)",
+	OptArg<"path(s)",
 		"Allow a given path for imports. A list of paths can be supplied by separating them with a comma."> allow_paths;
-	GroupFlag<"Input Options", "Ignore missing files."> ignore_missing = false;
-	GroupFlag<"Input Options",
+	OptFlag<"Ignore missing files."> ignore_missing = false;
+	OptFlag<
 		"Disable the default import callback to prevent the compiler from loading any source "
 		"files not listed on the command line or given in the Standard JSON input."> no_import_callback = false;
 };
 
 struct OutputArgs
 {
-	rfl::cli::Opt<OptStr, rfl::cli::attr::Short<"o">, rfl::cli::attr::Group<"Output Options">,
+	rfl::cli::Arg<OptStr, rfl::cli::attr::Short<"o">,
 		rfl::cli::attr::ValueName<"path">,
 		rfl::cli::attr::Desc<"If given, creates one file per output component and contract/file at the specified directory.">> output_dir;
-	GroupFlag<"Output Options", "Overwrite existing files (used together with -o)."> overwrite = false;
-	GroupOpt<"Output Options", "version", "Select desired EVM version."> evm_version;
-	GroupFlag<"Output Options", "Deprecated synonym of --via-ir."> experimental_via_ir = false;
-	GroupFlag<"Output Options", "Turn on compilation via IR."> via_ir = false;
-	GroupFlag<"Output Options", "(experimental) Turn on SSA CFG-based code generation. Implies compilation via IR."> via_ssa_cfg = false;
-	GroupOpt<"Output Options", "debug,default,strip,verboseDebug",
+	OptFlag<"Overwrite existing files (used together with -o)."> overwrite = false;
+	OptArg<"version", "Select desired EVM version."> evm_version;
+	OptFlag<"Deprecated synonym of --via-ir."> experimental_via_ir = false;
+	OptFlag<"Turn on compilation via IR."> via_ir = false;
+	OptFlag<"(experimental) Turn on SSA CFG-based code generation. Implies compilation via IR."> via_ssa_cfg = false;
+	OptArg<"debug,default,strip,verboseDebug",
 		"Strip revert (and require) reason strings or add additional debugging information. "
 		"Note that 'strip' does not remove custom errors."> revert_strings;
-	GroupOpt<"Output Options", "value",
+	OptArg<"value",
 		"Debug info components to be included in the produced EVM assembly and Yul code. "
 		"Value can be 'all', 'none' or a comma-separated list of debug info components."> debug_info;
-	GroupOpt<"Output Options", "stage",
+	OptArg<"stage",
 		"Stop execution after the given compiler stage. Valid options: \"parsing\"."> stop_after;
 };
 
 struct AlternativeInputArgs
 {
-	GroupFlag<"Alternative Input Modes",
+	OptFlag<
 		"Switch to Standard JSON input / output mode, ignoring all options. "
 		"It reads from standard input, if no input file was given, otherwise it reads from the provided input file. "
 		"The result will be written to standard output."> standard_json = false;
-	GroupFlag<"Alternative Input Modes",
+	OptFlag<
 		"Switch to linker mode, ignoring all options apart from --libraries and modify binaries in place."> link = false;
-	GroupFlag<"Alternative Input Modes",
+	OptFlag<
 		"Switch to strict assembly mode and assume input is strict assembly."> strict_assembly = false;
-	GroupFlag<"Alternative Input Modes",
+	OptFlag<
 		"(experimental) Resume compilation from an abstract syntax tree (AST) representing already parsed and analyzed Solidity code."> import_ast = false;
-	GroupFlag<"Alternative Input Modes",
+	OptFlag<
 		"(experimental) Resume compilation from EVM assembly in JSON format."> import_asm_json = false;
 };
 
 struct AssemblyModeArgs
 {
-	GroupOpt<"Assembly Mode Options", "evm", "Target machine in assembly or Yul mode."> machine;
-	GroupOpt<"Assembly Mode Options", "evm", "Input dialect to use in assembly or yul mode."> yul_dialect;
+	OptArg<"evm", "Target machine in assembly or Yul mode."> machine;
+	OptArg<"evm", "Input dialect to use in assembly or yul mode."> yul_dialect;
 };
 
 struct LinkerModeArgs
 {
-	GroupOpt<"Linker Mode Options", "libs",
+	OptArg<"libs",
 		"Direct string or file containing library addresses. Syntax: "
 		"<libraryName>=<address> [, or whitespace] ...\n"
 		"Address is interpreted as a hex string prefixed by 0x.",
@@ -205,105 +201,105 @@ struct LinkerModeArgs
 
 struct OutputFormattingArgs
 {
-	GroupFlag<"Output Formatting", "Output JSON in pretty format."> pretty_json = false;
-	GroupOpt<"Output Formatting", "N",
+	OptFlag<"Output JSON in pretty format."> pretty_json = false;
+	OptArg<"N",
 		"Indent pretty-printed JSON with N spaces. Enables '--pretty-json' automatically.",
 		std::optional<uint32_t>> json_indent;
-	GroupFlag<"Output Formatting", "Force colored output."> color = false;
-	GroupFlag<"Output Formatting", "Explicitly disable colored output, disabling terminal auto-detection."> no_color = false;
-	GroupFlag<"Output Formatting", "Output error codes."> error_codes = false;
+	OptFlag<"Force colored output."> color = false;
+	OptFlag<"Explicitly disable colored output, disabling terminal auto-detection."> no_color = false;
+	OptFlag<"Output error codes."> error_codes = false;
 };
 
 struct OutputComponentArgs
 {
-	OutCompFlag<"AST of all source files in a compact JSON format."> ast_compact_json = false;
-	rfl::Rename<"asm", OutCompFlag<"EVM assembly of the contracts.">> asm_ = false;
-	OutCompFlag<"EVM assembly of the contracts in JSON format."> asm_json = false;
-	OutCompFlag<"Opcodes of the contracts."> opcodes = false;
-	OutCompFlag<"Binary of the contracts in hex."> bin = false;
-	OutCompFlag<"Binary of the runtime part of the contracts in hex."> bin_runtime = false;
-	OutCompFlag<"ABI specification of the contracts."> abi = false;
-	OutCompFlag<"Intermediate Representation (IR) of all contracts."> ir = false;
-	OutCompFlag<"(experimental) AST of Intermediate Representation (IR) of all contracts in a compact JSON format."> ir_ast_json = false;
-	OutCompFlag<"Optimized Intermediate Representation (IR) of all contracts."> ir_optimized = false;
-	OutCompFlag<"(experimental) AST of optimized Intermediate Representation (IR) of all contracts in a compact JSON format."> ir_optimized_ast_json = false;
-	OutCompFlag<"Function signature hashes of the contracts."> hashes = false;
-	OutCompFlag<"Natspec user documentation of all contracts."> userdoc = false;
-	OutCompFlag<"Natspec developer documentation of all contracts."> devdoc = false;
-	OutCompFlag<"Combined Metadata JSON whose IPFS hash is stored on-chain."> metadata = false;
-	OutCompFlag<"Slots, offsets and types of the contract's state variables located in storage."> storage_layout = false;
-	OutCompFlag<"Slots, offsets and types of the contract's state variables located in transient storage."> transient_storage_layout = false;
-	OutCompFlag<"(experimental) Global ethdebug type and pointer tables (ethdebug/format/info/resources schema)."> ethdebug_resources = false;
-	OutCompFlag<"(experimental) Compiler information and source list (ethdebug/format/materials/compilation schema)."> ethdebug_compilation = false;
-	OutCompFlag<"(experimental) Debug information in ethdebug format for all contracts (ethdebug/format/program schema for creation bytecode)."> ethdebug_program = false;
-	OutCompFlag<"(experimental) Debug information in ethdebug format for the runtime part of all contracts (ethdebug/format/program schema for deployed bytecode)."> ethdebug_program_runtime = false;
+	OptFlag<"AST of all source files in a compact JSON format."> ast_compact_json = false;
+	rfl::Rename<"asm", OptFlag<"EVM assembly of the contracts.">> asm_ = false;
+	OptFlag<"EVM assembly of the contracts in JSON format."> asm_json = false;
+	OptFlag<"Opcodes of the contracts."> opcodes = false;
+	OptFlag<"Binary of the contracts in hex."> bin = false;
+	OptFlag<"Binary of the runtime part of the contracts in hex."> bin_runtime = false;
+	OptFlag<"ABI specification of the contracts."> abi = false;
+	OptFlag<"Intermediate Representation (IR) of all contracts."> ir = false;
+	OptFlag<"(experimental) AST of Intermediate Representation (IR) of all contracts in a compact JSON format."> ir_ast_json = false;
+	OptFlag<"Optimized Intermediate Representation (IR) of all contracts."> ir_optimized = false;
+	OptFlag<"(experimental) AST of optimized Intermediate Representation (IR) of all contracts in a compact JSON format."> ir_optimized_ast_json = false;
+	OptFlag<"Function signature hashes of the contracts."> hashes = false;
+	OptFlag<"Natspec user documentation of all contracts."> userdoc = false;
+	OptFlag<"Natspec developer documentation of all contracts."> devdoc = false;
+	OptFlag<"Combined Metadata JSON whose IPFS hash is stored on-chain."> metadata = false;
+	OptFlag<"Slots, offsets and types of the contract's state variables located in storage."> storage_layout = false;
+	OptFlag<"Slots, offsets and types of the contract's state variables located in transient storage."> transient_storage_layout = false;
+	OptFlag<"(experimental) Global ethdebug type and pointer tables (ethdebug/format/info/resources schema)."> ethdebug_resources = false;
+	OptFlag<"(experimental) Compiler information and source list (ethdebug/format/materials/compilation schema)."> ethdebug_compilation = false;
+	OptFlag<"(experimental) Debug information in ethdebug format for all contracts (ethdebug/format/program schema for creation bytecode)."> ethdebug_program = false;
+	OptFlag<"(experimental) Debug information in ethdebug format for the runtime part of all contracts (ethdebug/format/program schema for deployed bytecode)."> ethdebug_program_runtime = false;
 };
 
 struct ExtraOutputArgs
 {
-	GroupFlag<"Extra Output", "Print an estimate of the maximal gas usage for each function."> gas = false;
-	GroupOpt<"Extra Output", "abi,asm,ast,bin,bin-runtime,devdoc,function-debug,function-debug-runtime,generated-sources,generated-sources-runtime,hashes,metadata,opcodes,srcmap,srcmap-runtime,storage-layout,transient-storage-layout,userdoc",
+	OptFlag<"Print an estimate of the maximal gas usage for each function."> gas = false;
+	OptArg<"abi,asm,ast,bin,bin-runtime,devdoc,function-debug,function-debug-runtime,generated-sources,generated-sources-runtime,hashes,metadata,opcodes,srcmap,srcmap-runtime,storage-layout,transient-storage-layout,userdoc",
 		"Output a single json document containing the specified information."> combined_json;
 };
 
 struct MetadataArgs
 {
-	GroupFlag<"Metadata Options", "Do not append CBOR metadata to the end of the bytecode."> no_cbor_metadata = false;
-	GroupOpt<"Metadata Options", "ipfs,none,swarm", "Choose hash method for the bytecode metadata or disable it."> metadata_hash;
-	GroupFlag<"Metadata Options", "Store referenced sources as literal data in the metadata output."> metadata_literal = false;
+	OptFlag<"Do not append CBOR metadata to the end of the bytecode."> no_cbor_metadata = false;
+	OptArg<"ipfs,none,swarm", "Choose hash method for the bytecode metadata or disable it."> metadata_hash;
+	OptFlag<"Store referenced sources as literal data in the metadata output."> metadata_literal = false;
 };
 
 struct OptimizerArgs
 {
-	GroupFlag<"Optimizer Options", "Enable optimizer."> optimize = false;
-	GroupOpt<"Optimizer Options", "n",
+	OptFlag<"Enable optimizer."> optimize = false;
+	OptArg<"n",
 		"The number of runs specifies roughly how often each opcode of the deployed code will be executed across the lifetime of the contract. "
 		"Lower values will optimize more for initial deployment cost, higher values will optimize more for high-frequency usage.",
 		std::optional<OptimiserSettings::ExecutionCount>> optimize_runs;
-	GroupFlag<"Optimizer Options",
+	OptFlag<
 		"Enable Yul optimizer (independently of the EVM assembly optimizer). "
 		"The general --optimize option automatically enables this unless --no-optimize-yul is specified."> optimize_yul = false;
-	GroupFlag<"Optimizer Options", "Disable Yul optimizer (independently of the EVM assembly optimizer)."> no_optimize_yul = false;
-	GroupOpt<"Optimizer Options", "steps",
+	OptFlag<"Disable Yul optimizer (independently of the EVM assembly optimizer)."> no_optimize_yul = false;
+	OptArg<"steps",
 		"Forces Yul optimizer to use the specified sequence of optimization steps instead of the built-in one."> yul_optimizations;
 };
 
 struct ModelCheckerArgs
 {
-	GroupOpt<"Model Checker Options", "default,<source>:<contract>",
+	OptArg<"default,<source>:<contract>",
 		"Select which contracts should be analyzed using the form <source>:<contract>. "
 		"Multiple pairs <source>:<contract> can be selected at the same time, separated by a comma and no spaces."> model_checker_contracts;
-	GroupFlag<"Model Checker Options",
+	OptFlag<
 		"Encode division and modulo operations with their precise operators instead of multiplication with slack variables."> model_checker_div_mod_no_slacks = false;
-	GroupOpt<"Model Checker Options", "all,bmc,chc,none", "Select model checker engine."> model_checker_engine;
-	GroupOpt<"Model Checker Options", "untrusted,trusted",
+	OptArg<"all,bmc,chc,none", "Select model checker engine."> model_checker_engine;
+	OptArg<"untrusted,trusted",
 		"Select whether to assume (trusted) that external calls always invoke the code given by the type of the contract, if that code is available."> model_checker_ext_calls;
-	GroupOpt<"Model Checker Options", "default,all,contract,reentrancy",
+	OptArg<"default,all,contract,reentrancy",
 		"Select whether to report inferred contract inductive invariants. "
 		"Multiple types of invariants can be selected at the same time, separated by a comma and no spaces. "
 		"By default no invariants are reported."> model_checker_invariants;
-	GroupFlag<"Model Checker Options", "Print the queries created by the SMTChecker in the SMTLIB2 format."> model_checker_print_query = false;
-	GroupFlag<"Model Checker Options", "Show all targets that were proved safe separately."> model_checker_show_proved_safe = false;
-	GroupFlag<"Model Checker Options", "Show all unproved targets separately."> model_checker_show_unproved = false;
-	GroupFlag<"Model Checker Options", "Show all unsupported language features separately."> model_checker_show_unsupported = false;
-	GroupOpt<"Model Checker Options", "cvc5,eld,z3,smtlib2", "Select model checker solvers."> model_checker_solvers;
-	GroupOpt<"Model Checker Options", "default,all,constantCondition,underflow,overflow,divByZero,balance,assert,popEmptyArray,outOfBounds",
+	OptFlag<"Print the queries created by the SMTChecker in the SMTLIB2 format."> model_checker_print_query = false;
+	OptFlag<"Show all targets that were proved safe separately."> model_checker_show_proved_safe = false;
+	OptFlag<"Show all unproved targets separately."> model_checker_show_unproved = false;
+	OptFlag<"Show all unsupported language features separately."> model_checker_show_unsupported = false;
+	OptArg<"cvc5,eld,z3,smtlib2", "Select model checker solvers."> model_checker_solvers;
+	OptArg<"default,all,constantCondition,underflow,overflow,divByZero,balance,assert,popEmptyArray,outOfBounds",
 		"Select model checker verification targets. "
 		"Multiple targets can be selected at the same time, separated by a comma and no spaces. "
 		"By default all targets except underflow and overflow are selected."> model_checker_targets;
-	GroupOpt<"Model Checker Options", "ms",
+	OptArg<"ms",
 		"Set model checker timeout per query in milliseconds. "
 		"The default is a deterministic resource limit. "
 		"A timeout of 0 means no resource/time restrictions for any query.",
 		std::optional<unsigned>> model_checker_timeout;
-	GroupOpt<"Model Checker Options", "value",
+	OptArg<"value",
 		"Set loop unrolling depth for BMC engine. Default is 1.",
 		std::optional<unsigned>> model_checker_bmc_loop_iterations;
 };
 
 struct ExperimentalArgs
 {
-	GroupFlag<"Experimental options",
+	OptFlag<
 		"Enable experimental mode. "
 		"This flag does not activate any experimental features on its own - "
 		"it unlocks the ability to use them through the usual flags and pragmas."> experimental = false;
@@ -311,35 +307,33 @@ struct ExperimentalArgs
 
 struct DisabledArgs
 {
-	rfl::Hidden<Flag> assemble = false;
-	rfl::Hidden<Flag> lsp = false;
-	rfl::Hidden<Flag> yul = false;
+	rfl::cli::Flag<rfl::cli::attr::Hidden> assemble = false;
+	rfl::cli::Flag<rfl::cli::attr::Hidden> lsp = false;
+	rfl::cli::Flag<rfl::cli::attr::Hidden> yul = false;
 };
 
 using SolcCli = rfl::Processors<
-	rfl::NoExtraFields,
-	rfl::cli::SeparateOptionValues,
-	rfl::cli::ListDelimiter<"">,
-	rfl::cli::PureFlags
+	rfl::cli::GnuStyle,
+	rfl::cli::ListDelimiter<"">
 >;
 
 } // namespace
 
 struct CommandLineParser::RawArgs
 {
-	rfl::Flatten<GeneralInfoArgs> general;
-	rfl::Flatten<InputArgs> input;
-	rfl::Flatten<OutputArgs> output;
-	rfl::Flatten<AlternativeInputArgs> alt_input;
-	rfl::Flatten<AssemblyModeArgs> assembly;
-	rfl::Flatten<LinkerModeArgs> linker;
-	rfl::Flatten<OutputFormattingArgs> formatting;
-	rfl::Flatten<OutputComponentArgs> outputs;
-	rfl::Flatten<ExtraOutputArgs> extra_output;
-	rfl::Flatten<MetadataArgs> metadata;
-	rfl::Flatten<OptimizerArgs> optimizer;
-	rfl::Flatten<ModelCheckerArgs> model_checker;
-	rfl::Flatten<ExperimentalArgs> experimental;
+	rfl::cli::OptGroup<"General Information", GeneralInfoArgs> general;
+	rfl::cli::OptGroup<"Input Options", InputArgs> input;
+	rfl::cli::OptGroup<"Output Options", OutputArgs> output;
+	rfl::cli::OptGroup<"Alternative Input Modes", AlternativeInputArgs> alt_input;
+	rfl::cli::OptGroup<"Assembly Mode Options", AssemblyModeArgs> assembly;
+	rfl::cli::OptGroup<"Linker Mode Options", LinkerModeArgs> linker;
+	rfl::cli::OptGroup<"Output Formatting", OutputFormattingArgs> formatting;
+	rfl::cli::OptGroup<"Output Components", OutputComponentArgs> outputs;
+	rfl::cli::OptGroup<"Extra Output", ExtraOutputArgs> extra_output;
+	rfl::cli::OptGroup<"Metadata Options", MetadataArgs> metadata;
+	rfl::cli::OptGroup<"Optimizer Options", OptimizerArgs> optimizer;
+	rfl::cli::OptGroup<"Model Checker Options", ModelCheckerArgs> model_checker;
+	rfl::cli::OptGroup<"Experimental options", ExperimentalArgs> experimental;
 	rfl::Flatten<DisabledArgs> disabled;
 };
 

@@ -54,10 +54,8 @@ int main(int argc, char** argv)
 	};
 	using SolFuzzerCli = rfl::Processors<
 		rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::long_only>,
-		rfl::NoExtraFields,
-		rfl::cli::SeparateOptionValues,
-		rfl::cli::ListDelimiter<"">,
-		rfl::cli::PureFlags
+		rfl::cli::GnuStyle,
+		rfl::cli::ListDelimiter<"">
 	>;
 	rfl::cli::UsageOptions const usageOpts{
 		.detailed = true,

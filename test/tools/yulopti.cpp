@@ -272,20 +272,17 @@ int main(int argc, char** argv)
 {
 	struct YulOptiArgs
 	{
-		rfl::Positional<rfl::Description<"input file", std::optional<std::string>>> input_file;
-		rfl::Description<"steps to execute non-interactively", std::optional<std::string>> steps;
-		rfl::Short<"n", rfl::Description<"stop after executing the provided steps", rfl::DefaultVal<bool>>> non_interactive = false;
-		rfl::Description<
+		rfl::cli::Arg<std::optional<std::string>, rfl::cli::attr::Positional, rfl::cli::attr::Desc<"input file">> input_file;
+		rfl::cli::Arg<std::optional<std::string>, rfl::cli::attr::Desc<"steps to execute non-interactively">> steps;
+		rfl::cli::Flag<rfl::cli::attr::Short<"n">, rfl::cli::attr::Desc<"stop after executing the provided steps">> non_interactive = false;
+		rfl::cli::Flag<rfl::cli::attr::Desc<
 			"after the steps, run h and o and insert runtime checks of every fact the DataFlowAnalyzer "
-			"claims; run the output with yulrun",
-			rfl::DefaultVal<bool>> audit = false;
+			"claims; run the output with yulrun">> audit = false;
 	};
 	using YulOptiCli = rfl::Processors<
 		rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::short_and_long>,
-		rfl::NoExtraFields,
-		rfl::cli::SeparateOptionValues,
-		rfl::cli::ListDelimiter<"">,
-		rfl::cli::PureFlags
+		rfl::cli::GnuStyle,
+		rfl::cli::ListDelimiter<"">
 	>;
 	rfl::cli::UsageOptions const usageOpts{
 		.detailed = true,
