@@ -84,6 +84,7 @@ BOOST_AUTO_TEST_CASE(help_license_version)
 		{"--help", InputMode::Help},
 		{"--license", InputMode::License},
 		{"--version", InputMode::Version},
+		{"--standard-json-schema", InputMode::StandardJsonSchema},
 	};
 
 	for (auto const& [option, expectedMode]: expectedModePerOption)
@@ -93,6 +94,24 @@ BOOST_AUTO_TEST_CASE(help_license_version)
 		CommandLineOptions expectedOptions;
 		expectedOptions.input.mode = expectedMode;
 
+		BOOST_TEST(parsedOptions == expectedOptions);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(standard_json_schema_formatting_options)
+{
+	{
+		CommandLineOptions parsedOptions = parseCommandLine({"solc", "--standard-json-schema", "--pretty-json"});
+		CommandLineOptions expectedOptions;
+		expectedOptions.input.mode = InputMode::StandardJsonSchema;
+		expectedOptions.formatting.json = JsonFormat{JsonFormat::Pretty, JsonFormat::defaultIndent};
+		BOOST_TEST(parsedOptions == expectedOptions);
+	}
+	{
+		CommandLineOptions parsedOptions = parseCommandLine({"solc", "--standard-json-schema", "--json-indent=4"});
+		CommandLineOptions expectedOptions;
+		expectedOptions.input.mode = InputMode::StandardJsonSchema;
+		expectedOptions.formatting.json = JsonFormat{JsonFormat::Pretty, 4};
 		BOOST_TEST(parsedOptions == expectedOptions);
 	}
 }

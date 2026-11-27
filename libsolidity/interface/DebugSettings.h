@@ -21,9 +21,12 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
-#include <string>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace solidity::frontend
 {
@@ -37,24 +40,35 @@ enum class RevertStrings
 	VerboseDebug // add strings for internal reverts, add user-supplied strings if not provided
 };
 
+inline constexpr std::array<std::pair<RevertStrings, std::string_view>, 4> c_revertStringsTable{{
+	{RevertStrings::Default, "default"},
+	{RevertStrings::Strip, "strip"},
+	{RevertStrings::Debug, "debug"},
+	{RevertStrings::VerboseDebug, "verboseDebug"},
+}};
+
+inline constexpr std::array<std::string_view, c_revertStringsTable.size()> allRevertStringsNames() noexcept
+{
+	std::array<std::string_view, c_revertStringsTable.size()> names{};
+	for (size_t i = 0; i < c_revertStringsTable.size(); ++i)
+		names[i] = c_revertStringsTable[i].second;
+	return names;
+}
+
 inline std::string revertStringsToString(RevertStrings _str)
 {
-	switch (_str)
-	{
-	case RevertStrings::Default: return "default";
-	case RevertStrings::Strip: return "strip";
-	case RevertStrings::Debug: return "debug";
-	case RevertStrings::VerboseDebug: return "verboseDebug";
-	}
+	for (auto const& [value, name]: c_revertStringsTable)
+		if (value == _str)
+			return std::string(name);
 	// Cannot reach this.
 	return "INVALID";
 }
 
-inline std::optional<RevertStrings> revertStringsFromString(std::string const& _str)
+inline std::optional<RevertStrings> revertStringsFromString(std::string_view _str)
 {
-	for (auto i: {RevertStrings::Default, RevertStrings::Strip, RevertStrings::Debug, RevertStrings::VerboseDebug})
-		if (revertStringsToString(i) == _str)
-			return i;
+	for (auto const& [value, name]: c_revertStringsTable)
+		if (name == _str)
+			return value;
 	return std::nullopt;
 }
 

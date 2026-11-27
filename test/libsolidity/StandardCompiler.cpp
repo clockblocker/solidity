@@ -2524,6 +2524,146 @@ BOOST_AUTO_TEST_CASE(via_ssa_cfg_with_experimental)
 	BOOST_CHECK(!containsError(result, "FatalError", ""));
 }
 
+BOOST_AUTO_TEST_CASE(input_schema_structure_and_ssot_enums)
+{
+	std::string const compact = frontend::StandardCompiler::inputSchema();
+	Json schema;
+	BOOST_REQUIRE(util::jsonParseStrict(compact, schema));
+	BOOST_TEST(schema["$schema"] == "https://json-schema.org/draft/2020-12/schema");
+	BOOST_TEST(schema["$comment"].is_string());
+	BOOST_REQUIRE(schema.contains("$ref") && schema["$ref"].is_string());
+	BOOST_REQUIRE(schema.contains("$defs") && schema["$defs"].is_object());
+	Json const& defs = schema["$defs"];
+
+	auto resolveDef = [&](Json const& _node) -> Json const& {
+		auto findRef = [](Json const& _n) -> std::string {
+			if (_n.contains("$ref") && _n["$ref"].is_string())
+				return _n["$ref"].get<std::string>();
+			if (_n.contains("anyOf") && _n["anyOf"].is_array())
+				for (auto const& branch: _n["anyOf"])
+					if (branch.contains("$ref") && branch["$ref"].is_string())
+						return branch["$ref"].get<std::string>();
+			return {};
+		};
+		std::string const ref = findRef(_node);
+		std::string const prefix = "#/$defs/";
+		BOOST_REQUIRE(ref.starts_with(prefix));
+		std::string const key = ref.substr(prefix.size());
+		BOOST_REQUIRE(defs.contains(key));
+		return defs[key];
+	};
+
+	// Top-level StandardInput forbids unknown keys and declares the 4 standard top-level fields.
+	Json const& root = resolveDef(schema);
+	BOOST_TEST(root["type"] == "object");
+	BOOST_TEST(root["additionalProperties"] == false);
+	BOOST_TEST(root["properties"].contains("language"));
+	BOOST_TEST(root["properties"].contains("sources"));
+	BOOST_TEST(root["properties"].contains("auxiliaryInput"));
+	BOOST_TEST(root["properties"].contains("settings"));
+
+	// Helper to extract the enum array from an optional field schema (anyOf: [inner, {type: null}]).
+	auto extractEnum = [](Json const& _prop) -> std::vector<std::string> {
+		auto fromNode = [](Json const& _node) -> std::vector<std::string> {
+			if (_node.contains("enum") && _node["enum"].is_array())
+				return _node["enum"].get<std::vector<std::string>>();
+			if (_node.contains("const") && _node["const"].is_string())
+				return {_node["const"].get<std::string>()};
+			if (_node.contains("type") && _node["type"] == "array" && _node.contains("items"))
+			{
+				auto const& items = _node["items"];
+				if (items.contains("enum") && items["enum"].is_array())
+					return items["enum"].get<std::vector<std::string>>();
+			}
+			return {};
+		};
+		if (auto direct = fromNode(_prop); !direct.empty())
+			return direct;
+		if (_prop.contains("anyOf") && _prop["anyOf"].is_array())
+			for (auto const& branch: _prop["anyOf"])
+				if (auto found = fromNode(branch); !found.empty())
+					return found;
+		return {};
+	};
+
+	std::vector<std::string> const expectedLanguages{"Solidity", "Yul", "SolidityAST", "EVMAssembly"};
+	BOOST_TEST(extractEnum(root["properties"]["language"]) == expectedLanguages);
+
+	// Verify SSOT enum tables match the generated schema 1:1.
+	Json const& settingsProps = resolveDef(root["properties"]["settings"])["properties"];
+	BOOST_TEST(extractEnum(settingsProps["stopAfter"]) == (std::vector<std::string>{std::string(CompilerStack::StopAfterParsing)}));
+
+	std::vector<std::string> expectedEvmVersions;
+	for (auto const& v: EVMVersion::allVersions())
+		expectedEvmVersions.push_back(v.name());
+	BOOST_TEST(extractEnum(settingsProps["evmVersion"]) == expectedEvmVersions);
+
+	Json const& debugProps = resolveDef(settingsProps["debug"])["properties"];
+	std::vector<std::string> expectedRevertStrings;
+	for (auto const& name: allRevertStringsNames())
+		expectedRevertStrings.emplace_back(name);
+	BOOST_TEST(extractEnum(debugProps["revertStrings"]) == expectedRevertStrings);
+
+	Json const& mcProps = resolveDef(settingsProps["modelChecker"])["properties"];
+	auto toVec = [](auto const& _arr) {
+		std::vector<std::string> out;
+		for (auto const& s: _arr)
+			out.emplace_back(s);
+		return out;
+	};
+	BOOST_TEST(extractEnum(mcProps["engine"]) == toVec(ModelCheckerEngine::validNames()));
+	BOOST_TEST(extractEnum(mcProps["extCalls"]) == toVec(ModelCheckerExtCalls::validNames()));
+	BOOST_TEST(extractEnum(mcProps["invariants"]) == toVec(ModelCheckerInvariants::validNames()));
+	BOOST_TEST(extractEnum(mcProps["solvers"]) == toVec(smtutil::SMTSolverChoice::validNames()));
+	BOOST_TEST(extractEnum(mcProps["targets"]) == toVec(ModelCheckerTargets::validNames()));
+
+	// Verify pretty printing produces equivalent JSON.
+	std::string const pretty = frontend::StandardCompiler::inputSchema(util::JsonFormat{util::JsonFormat::Pretty, 2});
+	BOOST_TEST(pretty.find('\n') != std::string::npos);
+	Json parsedPretty;
+	BOOST_REQUIRE(util::jsonParseStrict(pretty, parsedPretty));
+	BOOST_TEST(parsedPretty == schema);
+}
+
+BOOST_AUTO_TEST_CASE(literal_fields_preserve_type_vs_value_errors)
+{
+	// Distinguish wrong JSON type vs unrecognized string literal value on rfl::Literal fields.
+	auto makeInput = [](std::string const& _settingsBody) {
+		return R"({"language":"Solidity","sources":{"a.sol":{"content":"contract C {}"}},"settings":{)" + _settingsBody + "}}";
+	};
+
+	// evmVersion
+	BOOST_CHECK(containsError(compile(makeInput(R"("evmVersion": 42)")), "JSONError", "evmVersion must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("evmVersion": "atlantis")")), "JSONError", "Invalid EVM version requested."));
+
+	// revertStrings
+	BOOST_CHECK(containsError(compile(makeInput(R"("debug": {"revertStrings": 42})")), "JSONError", "settings.debug.revertStrings must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("debug": {"revertStrings": "bogus"})")), "JSONError", "Invalid value for settings.debug.revertStrings."));
+
+	// modelChecker.engine
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"engine": 42})")), "JSONError", "settings.modelChecker.engine must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"engine": "bogus"})")), "JSONError", "Invalid model checker engine requested."));
+
+	// modelChecker.extCalls
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"extCalls": 42})")), "JSONError", "settings.modelChecker.extCalls must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"extCalls": "bogus"})")), "JSONError", "Invalid model checker extCalls requested."));
+
+	// modelChecker.invariants
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"invariants": 42})")), "JSONError", "settings.modelChecker.invariants must be an array."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"invariants": [42]})")), "JSONError", "Every invariant type in settings.modelChecker.invariants must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"invariants": ["bogus"]})")), "JSONError", "Invalid model checker invariants requested."));
+
+	// modelChecker.solvers
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"solvers": 42})")), "JSONError", "settings.modelChecker.solvers must be an array."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"solvers": [42]})")), "JSONError", "Every target in settings.modelChecker.solvers must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"solvers": ["bogus"]})")), "JSONError", "Invalid model checker solvers requested."));
+
+	// modelChecker.targets
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"targets": 42})")), "JSONError", "settings.modelChecker.targets must be an array."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"targets": [42]})")), "JSONError", "Every target in settings.modelChecker.targets must be a string."));
+	BOOST_CHECK(containsError(compile(makeInput(R"("modelChecker": {"targets": ["bogus"]})")), "JSONError", "Invalid model checker targets requested."));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 } // end namespaces

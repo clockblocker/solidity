@@ -93,16 +93,8 @@ static std::string const g_strOverwrite = "overwrite";
 static std::string const g_strRevertStrings = "revert-strings";
 static std::string const g_strStopAfter = "stop-after";
 
-/// Possible arguments to for --revert-strings
-static std::set<std::string> const g_revertStringsArgs
-{
-	revertStringsToString(RevertStrings::Default),
-	revertStringsToString(RevertStrings::Strip),
-	revertStringsToString(RevertStrings::Debug),
-	revertStringsToString(RevertStrings::VerboseDebug)
-};
-
 static std::string const g_strStandardJSON = "standard-json";
+static std::string const g_strStandardJSONSchema = "standard-json-schema";
 static std::string const g_strStrictAssembly = "strict-assembly";
 static std::string const g_strSwarm = "swarm";
 static std::string const g_strPrettyJson = "pretty-json";
@@ -141,6 +133,7 @@ static std::map<InputMode, std::string> const g_inputModeName = {
 	{InputMode::CompilerWithASTImport, "compiler (AST import)"},
 	{InputMode::Assembler, "assembler"},
 	{InputMode::StandardJson, "standard JSON"},
+	{InputMode::StandardJsonSchema, "standard JSON schema"},
 	{InputMode::Linker, "linker"},
 	{InputMode::EVMAssemblerJSON, "EVM assembler (JSON format)"},
 };
@@ -484,6 +477,7 @@ void CommandLineParser::parseOutputSelection()
 		case InputMode::Help:
 		case InputMode::License:
 		case InputMode::Version:
+		case InputMode::StandardJsonSchema:
 			solAssert(false);
 		case InputMode::Compiler:
 		case InputMode::CompilerWithASTImport:
@@ -628,7 +622,7 @@ General Information)").c_str(),
 		)
 		(
 			g_strRevertStrings.c_str(),
-			po::value<std::string>()->value_name(util::joinHumanReadable(g_revertStringsArgs, ",")),
+			po::value<std::string>()->value_name(util::joinHumanReadable(allRevertStringsNames(), ",")),
 			"Strip revert (and require) reason strings or add additional debugging information. "
 			"Note that 'strip' does not remove custom errors."
 		)
@@ -644,7 +638,7 @@ General Information)").c_str(),
 		(
 			g_strStopAfter.c_str(),
 			po::value<std::string>()->value_name("stage"),
-			"Stop execution after the given compiler stage. Valid options: \"parsing\"."
+			("Stop execution after the given compiler stage. Valid options: \"" + std::string(CompilerStack::StopAfterParsing) + "\".").c_str()
 		)
 	;
 	desc.add(outputOptions);
@@ -655,6 +649,10 @@ General Information)").c_str(),
 			g_strStandardJSON.c_str(),
 			"Switch to Standard JSON input / output mode, ignoring all options. "
 			"It reads from standard input, if no input file was given, otherwise it reads from the provided input file. The result will be written to standard output."
+		)
+		(
+			g_strStandardJSONSchema.c_str(),
+			"Output the JSON Schema (Draft 2020-12) for Standard JSON compiler input and exit."
 		)
 		(
 			g_strLink.c_str(),
@@ -852,18 +850,18 @@ General Information)").c_str(),
 		)
 		(
 			g_strModelCheckerEngine.c_str(),
-			po::value<std::string>()->value_name("all,bmc,chc,none")->default_value("none"),
+			po::value<std::string>()->value_name(util::joinHumanReadable(ModelCheckerEngine::validNames(), ","))->default_value("none"),
 			"Select model checker engine."
 		)
 		(
 			g_strModelCheckerExtCalls.c_str(),
-			po::value<std::string>()->value_name("untrusted,trusted")->default_value("untrusted"),
+			po::value<std::string>()->value_name(util::joinHumanReadable(ModelCheckerExtCalls::validNames(), ","))->default_value("untrusted"),
 			"Select whether to assume (trusted) that external calls always invoke"
 			" the code given by the type of the contract, if that code is available."
 		)
 		(
 			g_strModelCheckerInvariants.c_str(),
-			po::value<std::string>()->value_name("default,all,contract,reentrancy")->default_value("default"),
+			po::value<std::string>()->value_name("default,all," + util::joinHumanReadable(ModelCheckerInvariants::validNames(), ","))->default_value("default"),
 			"Select whether to report inferred contract inductive invariants."
 			" Multiple types of invariants can be selected at the same time, separated by a comma and no spaces."
 			" By default no invariants are reported."
@@ -886,12 +884,12 @@ General Information)").c_str(),
 		)
 		(
 			g_strModelCheckerSolvers.c_str(),
-			po::value<std::string>()->value_name("cvc5,eld,z3,smtlib2")->default_value("z3"),
+			po::value<std::string>()->value_name(util::joinHumanReadable(smtutil::SMTSolverChoice::validNames(), ","))->default_value("z3"),
 			"Select model checker solvers."
 		)
 		(
 			g_strModelCheckerTargets.c_str(),
-			po::value<std::string>()->value_name("default,all,constantCondition,underflow,overflow,divByZero,balance,assert,popEmptyArray,outOfBounds")->default_value("default"),
+			po::value<std::string>()->value_name("default,all," + util::joinHumanReadable(ModelCheckerTargets::validNames(), ","))->default_value("default"),
 			"Select model checker verification targets."
 			"Multiple targets can be selected at the same time, separated by a comma and no spaces."
 			" By default all targets except underflow and overflow are selected."
@@ -981,6 +979,7 @@ void CommandLineParser::processArgs()
 		g_strLicense,
 		g_strVersion,
 		g_strStandardJSON,
+		g_strStandardJSONSchema,
 		g_strLink,
 		g_strStrictAssembly,
 		g_strImportAst,
@@ -997,6 +996,8 @@ void CommandLineParser::processArgs()
 		m_options.input.mode = InputMode::Version;
 	else if (m_args.count(g_strStandardJSON) > 0)
 		m_options.input.mode = InputMode::StandardJson;
+	else if (m_args.count(g_strStandardJSONSchema) > 0)
+		m_options.input.mode = InputMode::StandardJsonSchema;
 	else if (m_args.contains(g_strStrictAssembly))
 		m_options.input.mode = InputMode::Assembler;
 	else if (m_args.count(g_strLink) > 0)
@@ -1014,6 +1015,18 @@ void CommandLineParser::processArgs()
 		m_options.input.mode == InputMode::Version
 	)
 		return;
+
+	if (m_options.input.mode == InputMode::StandardJsonSchema)
+	{
+		if (m_args.count(g_strPrettyJson) > 0)
+			m_options.formatting.json.format = util::JsonFormat::Pretty;
+		if (!m_args[g_strJsonIndent].defaulted())
+		{
+			m_options.formatting.json.format = util::JsonFormat::Pretty;
+			m_options.formatting.json.indent = m_args[g_strJsonIndent].as<uint32_t>();
+		}
+		return;
+	}
 
 	if (m_options.experimental && m_options.input.mode == InputMode::StandardJson)
 		solThrow(
@@ -1243,10 +1256,10 @@ void CommandLineParser::processArgs()
 
 	if (m_args.count(g_strStopAfter))
 	{
-		if (m_args[g_strStopAfter].as<std::string>() != "parsing")
-			solThrow(CommandLineValidationError, "Valid options for --" + g_strStopAfter + " are: \"parsing\".\n");
-		else
-			m_options.output.stopAfter = CompilerStack::State::Parsed;
+		auto const stage = CompilerStack::stopAfterFromString(m_args[g_strStopAfter].as<std::string>());
+		if (!stage)
+			solThrow(CommandLineValidationError, "Valid options for --" + g_strStopAfter + " are: \"" + std::string(CompilerStack::StopAfterParsing) + "\".\n");
+		m_options.output.stopAfter = *stage;
 	}
 
 	parseInputPathsAndRemappings();

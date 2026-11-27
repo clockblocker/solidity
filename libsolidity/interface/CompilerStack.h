@@ -53,9 +53,11 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace solidity::langutil
@@ -114,6 +116,15 @@ public:
 		AnalysisSuccessful,
 		CompilationSuccessful
 	};
+
+	static constexpr std::string_view StopAfterParsing = "parsing";
+
+	static constexpr std::optional<State> stopAfterFromString(std::string_view _stage) noexcept
+	{
+		if (_stage == StopAfterParsing)
+			return State::Parsed;
+		return std::nullopt;
+	}
 
 	enum class MetadataFormat {
 		WithReleaseVersionTag,

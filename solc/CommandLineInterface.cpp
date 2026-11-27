@@ -581,7 +581,8 @@ void CommandLineInterface::readInputFiles()
 	static std::set<frontend::InputMode> const noInputFiles{
 		frontend::InputMode::Help,
 		frontend::InputMode::License,
-		frontend::InputMode::Version
+		frontend::InputMode::Version,
+		frontend::InputMode::StandardJsonSchema
 	};
 
 	if (noInputFiles.count(m_options.input.mode) == 1)
@@ -820,6 +821,9 @@ void CommandLineInterface::processInput()
 		m_standardJsonInput.reset();
 		break;
 	}
+	case InputMode::StandardJsonSchema:
+		sout() << StandardCompiler::inputSchema(m_options.formatting.json) << std::endl;
+		break;
 	case InputMode::Assembler:
 		assembleYul(m_options.assembly.targetMachine);
 		break;

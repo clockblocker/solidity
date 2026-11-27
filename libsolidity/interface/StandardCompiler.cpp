@@ -45,6 +45,7 @@
 #include <rfl/error_format.hpp>
 #include <rfl/json.hpp>
 #include <rfl/json/Raw.hpp>
+#include <rfl/json/to_schema.hpp>
 #include <rfl/nlohmann.hpp>
 
 #include <algorithm>
@@ -463,7 +464,51 @@ namespace solidity::frontend::standard_json
 {
 
 using OutputSelectionMap = std::map<std::string, std::map<std::string, std::vector<std::string>>>;
+using LanguageLiteral = rfl::Literal<"Solidity", "Yul", "SolidityAST", "EVMAssembly">;
+using StopAfterLiteral = rfl::Literal<"parsing">;
+using EvmVersionLiteral = rfl::Literal<
+	"homestead",
+	"tangerineWhistle",
+	"spuriousDragon",
+	"byzantium",
+	"constantinople",
+	"petersburg",
+	"istanbul",
+	"berlin",
+	"london",
+	"paris",
+	"shanghai",
+	"cancun",
+	"prague",
+	"osaka",
+	"amsterdam",
+	"@future"
+>;
+using RevertStringsLiteral = rfl::Literal<"default", "strip", "debug", "verboseDebug">;
 using BytecodeHashLiteral = rfl::Literal<"ipfs", "bzzr1", "none">;
+using ModelCheckerEngineLiteral = rfl::Literal<"all", "bmc", "chc", "none">;
+using ModelCheckerExtCallsLiteral = rfl::Literal<"untrusted", "trusted">;
+using ModelCheckerInvariantLiteral = rfl::Literal<"contract", "reentrancy">;
+using ModelCheckerSolverLiteral = rfl::Literal<"cvc5", "eld", "z3", "smtlib2">;
+using ModelCheckerTargetLiteral = rfl::Literal<
+	"constantCondition",
+	"underflow",
+	"overflow",
+	"divByZero",
+	"balance",
+	"assert",
+	"popEmptyArray",
+	"outOfBounds"
+>;
+
+static_assert(StopAfterLiteral::size() == 1 && CompilerStack::StopAfterParsing == "parsing");
+static_assert(EvmVersionLiteral::size() == langutil::EVMVersion::allVersions().size());
+static_assert(RevertStringsLiteral::size() == c_revertStringsTable.size());
+static_assert(ModelCheckerEngineLiteral::size() == ModelCheckerEngine::validNames().size());
+static_assert(ModelCheckerExtCallsLiteral::size() == ModelCheckerExtCalls::validNames().size());
+static_assert(ModelCheckerInvariantLiteral::size() == ModelCheckerInvariants::validNames().size());
+static_assert(ModelCheckerSolverLiteral::size() == smtutil::SMTSolverChoice::validNames().size());
+static_assert(ModelCheckerTargetLiteral::size() == ModelCheckerTargets::validNames().size());
 
 struct YulDetailsDisabledInput
 {
@@ -507,7 +552,7 @@ struct MetadataInput
 
 struct DebugInput
 {
-	std::optional<std::string> revertStrings;
+	std::optional<RevertStringsLiteral> revertStrings;
 	std::optional<std::vector<std::string>> debugInfo;
 };
 
@@ -515,16 +560,16 @@ struct ModelCheckerInput
 {
 	std::optional<std::map<std::string, std::vector<std::string>>> contracts;
 	std::optional<bool> divModNoSlacks;
-	std::optional<std::string> engine;
+	std::optional<ModelCheckerEngineLiteral> engine;
 	std::optional<unsigned> bmcLoopIterations;
-	std::optional<std::string> extCalls;
-	std::optional<std::vector<std::string>> invariants;
+	std::optional<ModelCheckerExtCallsLiteral> extCalls;
+	std::optional<std::vector<ModelCheckerInvariantLiteral>> invariants;
 	std::optional<bool> showProvedSafe;
 	std::optional<bool> showUnproved;
 	std::optional<bool> showUnsupported;
-	std::optional<std::vector<std::string>> solvers;
+	std::optional<std::vector<ModelCheckerSolverLiteral>> solvers;
 	std::optional<bool> printQuery;
-	std::optional<std::vector<std::string>> targets;
+	std::optional<std::vector<ModelCheckerTargetLiteral>> targets;
 	std::optional<Json::number_unsigned_t> timeout;
 };
 
@@ -548,10 +593,10 @@ struct EvmAssemblySourceInput
 struct SettingsInput
 {
 	std::optional<bool> experimental;
-	std::optional<std::string> stopAfter;
+	std::optional<StopAfterLiteral> stopAfter;
 	std::optional<bool> viaIR;
 	std::optional<bool> viaSSACFG;
-	std::optional<std::string> evmVersion;
+	std::optional<EvmVersionLiteral> evmVersion;
 	std::optional<DebugInput> debug;
 	std::optional<std::vector<std::string>> remappings;
 	std::optional<OptimizerInput> optimizer;
@@ -563,9 +608,9 @@ struct SettingsInput
 
 struct StandardInput
 {
-	std::optional<std::string> language;
+	std::optional<LanguageLiteral> language;
 	// #69 Bridge 2: polymorphic per-language raw JSON subtree (Solidity/Yul, SolidityAST, EVMAssembly).
-	std::optional<Json> sources;
+	std::optional<std::map<std::string, Json>> sources;
 	std::optional<AuxiliaryInput> auxiliaryInput;
 	std::optional<SettingsInput> settings;
 };
@@ -613,7 +658,19 @@ Json formatRflError(rfl::Error const& _error)
 	if (p.empty())
 		return formatFatalError(Error::Type::JSONError, "Input is not a JSON object.");
 
+	static std::map<std::string, char const*, std::less<>> const invalidValueMessages{
+		{"language", "Only \"Solidity\", \"Yul\", \"SolidityAST\" or \"EVMAssembly\" is supported as a language."},
+		{"settings.stopAfter", "Invalid value for \"settings.stopAfter\". Only valid value is \"parsing\"."},
+		{"settings.evmVersion", "Invalid EVM version requested."},
+		{"settings.debug.revertStrings", "Invalid value for settings.debug.revertStrings."},
+		{"settings.metadata.bytecodeHash", "\"settings.metadata.bytecodeHash\" must be \"ipfs\", \"bzzr1\" or \"none\""},
+		{"settings.modelChecker.engine", "Invalid model checker engine requested."},
+		{"settings.modelChecker.extCalls", "Invalid model checker extCalls requested."},
+	};
+
 	static std::map<std::string, char const*, std::less<>> const legacyMessages{
+		{"language", "Only \"Solidity\", \"Yul\", \"SolidityAST\" or \"EVMAssembly\" is supported as a language."},
+		{"sources", "\"sources\" is not a JSON object."},
 		{"auxiliaryInput", "\"auxiliaryInput\" must be an object"},
 		{"auxiliaryInput.smtlib2responses", "\"auxiliaryInput.smtlib2responses\" must be an object."},
 		{"settings", "\"settings\" must be an object"},
@@ -653,6 +710,11 @@ Json formatRflError(rfl::Error const& _error)
 	};
 
 	std::string const pathStr = rfl::format_path(p);
+	// rfl::Literal::from_string reports ErrorKind::invalid_value on unrecognized string values,
+	// whereas rfl::nlohmann::Reader::to_basic_type reports ErrorKind::other on wrong JSON types.
+	if (d.kind == rfl::ErrorKind::invalid_value)
+		if (auto it = invalidValueMessages.find(pathStr); it != invalidValueMessages.end())
+			return formatFatalError(Error::Type::JSONError, it->second);
 	if (auto it = legacyMessages.find(pathStr); it != legacyMessages.end())
 		return formatFatalError(Error::Type::JSONError, it->second);
 
@@ -683,9 +745,19 @@ Json formatRflError(rfl::Error const& _error)
 			if (*k2 == "contracts")
 				return formatFatalError(Error::Type::JSONError, p.size() == 4 ? "Source contracts must be an array." : "Every contract in settings.modelChecker.contracts must be a string.");
 			if (*k2 == "invariants")
-				return formatFatalError(Error::Type::JSONError, "Every invariant type in settings.modelChecker.invariants must be a string.");
+				return formatFatalError(
+					Error::Type::JSONError,
+					d.kind == rfl::ErrorKind::invalid_value
+						? "Invalid model checker invariants requested."
+						: "Every invariant type in settings.modelChecker.invariants must be a string."
+				);
 			if (*k2 == "solvers" || *k2 == "targets")
-				return formatFatalError(Error::Type::JSONError, "Every target in settings.modelChecker." + *k2 + " must be a string.");
+				return formatFatalError(
+					Error::Type::JSONError,
+					d.kind == rfl::ErrorKind::invalid_value
+						? "Invalid model checker " + *k2 + " requested."
+						: "Every target in settings.modelChecker." + *k2 + " must be a string."
+				);
 		}
 	}
 
@@ -820,20 +892,17 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 	if (!parsedInput)
 		return formatRflError(parsedInput.error());
 
-	ret.language = parsedInput->language.value_or("");
-
-	if (parsedInput->sources && !parsedInput->sources->is_object() && !parsedInput->sources->is_null())
-		return formatFatalError(Error::Type::JSONError, "\"sources\" is not a JSON object.");
+	ret.language = parsedInput->language ? parsedInput->language->str() : "";
 
 	if (!parsedInput->sources || parsedInput->sources->empty())
 		return formatFatalError(Error::Type::JSONError, "No input sources specified.");
 
-	Json const& sources = *parsedInput->sources;
+	auto const& sources = *parsedInput->sources;
 	ret.errors = Json::array();
 
 	if (ret.language == "Solidity" || ret.language == "Yul")
 	{
-		for (auto const& [sourceName, sourceValue]: sources.items())
+		for (auto const& [sourceName, sourceValue]: sources)
 		{
 			auto parsedSource = rfl::nlohmann::read<SoliditySourceInput, rfl::NoExtraFields>(sourceValue);
 			if (!parsedSource)
@@ -914,12 +983,12 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 	}
 	else if (ret.language == "SolidityAST")
 	{
-		for (auto const& [sourceName, sourceValue]: sources.items())
+		for (auto const& [sourceName, sourceValue]: sources)
 			ret.sources[sourceName] = util::jsonCompactPrint(sourceValue);
 	}
 	else if (ret.language == "EVMAssembly")
 	{
-		for (auto const& [sourceName, sourceValue]: sources.items())
+		for (auto const& [sourceName, sourceValue]: sources)
 		{
 			auto parsedAsm = rfl::nlohmann::read<EvmAssemblySourceInput, rfl::NoExtraFields>(sourceValue);
 			if (!parsedAsm || !parsedAsm->assemblyJson.is_object())
@@ -959,9 +1028,9 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 
 	if (settings.stopAfter)
 	{
-		if (*settings.stopAfter != "parsing")
-			return formatFatalError(Error::Type::JSONError, "Invalid value for \"settings.stopAfter\". Only valid value is \"parsing\".");
-		ret.stopAfter = CompilerStack::State::Parsed;
+		auto const stage = CompilerStack::stopAfterFromString(settings.stopAfter->str());
+		solAssert(stage.has_value());
+		ret.stopAfter = *stage;
 	}
 
 	if (settings.viaIR)
@@ -983,9 +1052,8 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 
 	if (settings.evmVersion)
 	{
-		std::optional<langutil::EVMVersion> version = langutil::EVMVersion::fromString(*settings.evmVersion);
-		if (!version)
-			return formatFatalError(Error::Type::JSONError, "Invalid EVM version requested.");
+		std::optional<langutil::EVMVersion> version = langutil::EVMVersion::fromString(settings.evmVersion->str());
+		solAssert(version.has_value());
 		if (version < EVMVersion::london())
 			ret.errors.emplace_back(formatError(
 				Error::Type::Warning,
@@ -1004,9 +1072,8 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 	{
 		if (settings.debug->revertStrings)
 		{
-			std::optional<RevertStrings> revertStrings = revertStringsFromString(*settings.debug->revertStrings);
-			if (!revertStrings)
-				return formatFatalError(Error::Type::JSONError, "Invalid value for settings.debug.revertStrings.");
+			std::optional<RevertStrings> revertStrings = revertStringsFromString(settings.debug->revertStrings->str());
+			solAssert(revertStrings.has_value());
 			if (*revertStrings == RevertStrings::VerboseDebug)
 				return formatFatalError(
 					Error::Type::UnimplementedFeatureError,
@@ -1145,9 +1212,8 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 
 		if (mc.engine)
 		{
-			std::optional<ModelCheckerEngine> engine = ModelCheckerEngine::fromString(*mc.engine);
-			if (!engine)
-				return formatFatalError(Error::Type::JSONError, "Invalid model checker engine requested.");
+			std::optional<ModelCheckerEngine> engine = ModelCheckerEngine::fromString(mc.engine->str());
+			solAssert(engine.has_value());
 			ret.modelCheckerSettings.engine = *engine;
 		}
 
@@ -1160,9 +1226,8 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 
 		if (mc.extCalls)
 		{
-			std::optional<ModelCheckerExtCalls> extCalls = ModelCheckerExtCalls::fromString(*mc.extCalls);
-			if (!extCalls)
-				return formatFatalError(Error::Type::JSONError, "Invalid model checker extCalls requested.");
+			std::optional<ModelCheckerExtCalls> extCalls = ModelCheckerExtCalls::fromString(mc.extCalls->str());
+			solAssert(extCalls.has_value());
 			ret.modelCheckerSettings.externalCalls = *extCalls;
 		}
 
@@ -1170,8 +1235,10 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 		{
 			ModelCheckerInvariants invariants;
 			for (auto const& i: *mc.invariants)
-				if (!invariants.setFromString(i))
-					return formatFatalError(Error::Type::JSONError, "Invalid model checker invariants requested.");
+			{
+				bool const ok = invariants.setFromString(i.str());
+				solAssert(ok);
+			}
 			if (invariants.invariants.empty())
 				return formatFatalError(Error::Type::JSONError, "settings.modelChecker.invariants must be a non-empty array.");
 			ret.modelCheckerSettings.invariants = invariants;
@@ -1188,8 +1255,10 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 		{
 			smtutil::SMTSolverChoice solvers;
 			for (auto const& s: *mc.solvers)
-				if (!solvers.setSolver(s))
-					return formatFatalError(Error::Type::JSONError, "Invalid model checker solvers requested.");
+			{
+				bool const ok = solvers.setSolver(s.str());
+				solAssert(ok);
+			}
 			ret.modelCheckerSettings.solvers = solvers;
 		}
 
@@ -1200,8 +1269,10 @@ std::variant<StandardCompiler::InputsAndSettings, Json> StandardCompiler::parseI
 		{
 			ModelCheckerTargets targets;
 			for (auto const& t: *mc.targets)
-				if (!targets.setFromString(t))
-					return formatFatalError(Error::Type::JSONError, "Invalid model checker targets requested.");
+			{
+				bool const ok = targets.setFromString(t.str());
+				solAssert(ok);
+			}
 			if (targets.targets.empty())
 				return formatFatalError(Error::Type::JSONError, "settings.modelChecker.targets must be a non-empty array.");
 			ret.modelCheckerSettings.targets = targets;
@@ -1888,6 +1959,17 @@ std::string StandardCompiler::compile(std::string const& _input) noexcept
 	{
 		return "{\"errors\":[{\"type\":\"JSONError\",\"component\":\"general\",\"severity\":\"error\",\"message\":\"Error writing output JSON.\"}]}";
 	}
+}
+
+std::string StandardCompiler::inputSchema(util::JsonFormat const& _format)
+{
+	std::string raw = rfl::json::to_schema<standard_json::StandardInput, rfl::NoExtraFields>(
+		0,
+		"Solidity Standard JSON compiler input schema (generated from standard_json::StandardInput)"
+	);
+	if (_format.format == util::JsonFormat::Pretty)
+		return util::jsonPrint(Json::parse(raw), _format);
+	return raw;
 }
 
 Json StandardCompiler::formatFunctionDebugData(

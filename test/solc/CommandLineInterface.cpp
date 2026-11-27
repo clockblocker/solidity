@@ -146,6 +146,35 @@ BOOST_AUTO_TEST_CASE(version)
 	BOOST_TEST(result.options.input.mode == InputMode::Version);
 }
 
+BOOST_AUTO_TEST_CASE(standard_json_schema)
+{
+	OptionsReaderAndMessages result = runCLI({"solc", "--standard-json-schema"}, "");
+
+	BOOST_TEST(result.success);
+	BOOST_TEST(result.stderrContent == "");
+	BOOST_TEST(result.options.input.mode == InputMode::StandardJsonSchema);
+
+	Json schema;
+	BOOST_REQUIRE(util::jsonParseStrict(result.stdoutContent, schema));
+	BOOST_TEST(schema.is_object());
+	BOOST_TEST(schema["$schema"] == "https://json-schema.org/draft/2020-12/schema");
+	BOOST_TEST(schema.contains("$defs"));
+	BOOST_REQUIRE(schema.contains("$ref") && schema["$ref"].is_string());
+	std::string const ref = schema["$ref"].get<std::string>();
+	BOOST_REQUIRE(boost::starts_with(ref, "#/$defs/"));
+	BOOST_TEST(schema["$defs"].contains(ref.substr(std::string("#/$defs/").size())));
+
+	OptionsReaderAndMessages prettyResult = runCLI({"solc", "--standard-json-schema", "--pretty-json", "--json-indent", "4"}, "");
+	BOOST_TEST(prettyResult.success);
+	BOOST_TEST(prettyResult.stderrContent == "");
+	BOOST_CHECK(prettyResult.options.formatting.json == (JsonFormat{JsonFormat::Pretty, 4}));
+	BOOST_TEST(prettyResult.stdoutContent.find("\n    \"") != std::string::npos);
+
+	Json prettySchema;
+	BOOST_REQUIRE(util::jsonParseStrict(prettyResult.stdoutContent, prettySchema));
+	BOOST_TEST(prettySchema == schema);
+}
+
 BOOST_AUTO_TEST_CASE(multiple_input_modes)
 {
 	std::array inputModeOptions {
@@ -153,6 +182,7 @@ BOOST_AUTO_TEST_CASE(multiple_input_modes)
 		"--license",
 		"--version",
 		"--standard-json",
+		"--standard-json-schema",
 		"--link",
 		"--strict-assembly",
 		"--import-ast",
@@ -160,7 +190,7 @@ BOOST_AUTO_TEST_CASE(multiple_input_modes)
 	};
 	std::string expectedMessage =
 		"The following options are mutually exclusive: "
-		"--help, --license, --version, --standard-json, --link, --strict-assembly, --import-ast, --import-asm-json. "
+		"--help, --license, --version, --standard-json, --standard-json-schema, --link, --strict-assembly, --import-ast, --import-asm-json. "
 		"Select at most one.";
 
 	for (auto const& mode1: inputModeOptions)
