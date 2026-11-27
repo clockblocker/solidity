@@ -47,7 +47,7 @@ int main(int argc, char** argv)
 			"Expects a binary string of up to 32 bytes on stdin.",
 			rfl::DefaultVal<bool>> const_opt = false;
 		rfl::Positional<rfl::Description<"input file", std::optional<std::string>>> input_file;
-		rfl::MultiToken<rfl::Description<"input files", std::optional<std::vector<std::string>>>> input_files;
+		rfl::cli::Arg<std::optional<std::vector<std::string>>, rfl::cli::attr::MultiToken, rfl::cli::attr::Desc<"input files">> input_files;
 		rfl::Description<
 			"Run without optimizations. Cannot be used together with standard-json.",
 			rfl::DefaultVal<bool>> without_optimizer = false;
