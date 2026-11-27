@@ -26,7 +26,6 @@
 #include <tools/yulPhaser/GeneticAlgorithms.h>
 
 #include <boost/filesystem.hpp>
-#include <boost/program_options.hpp>
 
 #include <cstddef>
 #include <istream>
@@ -57,6 +56,7 @@ class GeneticAlgorithm;
 class Population;
 class Program;
 class ProgramCache;
+struct PhaserCommandLineArgs;
 
 enum class PhaserMode
 {
@@ -126,7 +126,7 @@ public:
 		double classicDeletionChance;
 		double classicAdditionChance;
 
-		static Options fromCommandLine(boost::program_options::variables_map const& _arguments);
+		static Options fromCommandLine(PhaserCommandLineArgs const& _arguments);
 	};
 
 	static std::unique_ptr<GeneticAlgorithm> build(
@@ -142,7 +142,7 @@ class CodeWeightFactory
 {
 public:
 	static yul::CodeWeights buildFromCommandLine(
-		boost::program_options::variables_map const& _arguments
+		PhaserCommandLineArgs const& _arguments
 	);
 };
 
@@ -159,7 +159,7 @@ public:
 		size_t relativeMetricScale;
 		size_t chromosomeRepetitions;
 
-		static Options fromCommandLine(boost::program_options::variables_map const& _arguments);
+		static Options fromCommandLine(PhaserCommandLineArgs const& _arguments);
 	};
 
 	static std::unique_ptr<FitnessMetric> build(
@@ -184,7 +184,7 @@ public:
 		std::vector<size_t> randomPopulation;
 		std::vector<std::string> populationFromFile;
 
-		static Options fromCommandLine(boost::program_options::variables_map const& _arguments);
+		static Options fromCommandLine(PhaserCommandLineArgs const& _arguments);
 	};
 
 	static Population build(
@@ -217,7 +217,7 @@ public:
 	{
 		bool programCacheEnabled;
 
-		static Options fromCommandLine(boost::program_options::variables_map const& _arguments);
+		static Options fromCommandLine(PhaserCommandLineArgs const& _arguments);
 	};
 
 	static std::vector<std::shared_ptr<ProgramCache>> build(
@@ -237,7 +237,7 @@ public:
 		std::vector<std::string> inputFiles;
 		std::string prefix;
 
-		static Options fromCommandLine(boost::program_options::variables_map const& _arguments);
+		static Options fromCommandLine(PhaserCommandLineArgs const& _arguments);
 	};
 
 	static std::vector<Program> build(Options const& _options);
@@ -257,25 +257,18 @@ public:
 	static void main(int argc, char** argv);
 
 private:
-	struct CommandLineDescription
-	{
-		boost::program_options::options_description keywordDescription;
-		boost::program_options::positional_options_description positionalDescription;
-	};
+	static std::unique_ptr<PhaserCommandLineArgs> parseCommandLine(int _argc, char** _argv);
+	static void initialiseRNG(PhaserCommandLineArgs const& _arguments);
+	static AlgorithmRunner::Options buildAlgorithmRunnerOptions(PhaserCommandLineArgs const& _arguments);
 
-	static CommandLineDescription buildCommandLineDescription();
-	static std::optional<boost::program_options::variables_map> parseCommandLine(int _argc, char** _argv);
-	static void initialiseRNG(boost::program_options::variables_map const& _arguments);
-	static AlgorithmRunner::Options buildAlgorithmRunnerOptions(boost::program_options::variables_map const& _arguments);
-
-	static void runPhaser(boost::program_options::variables_map const& _arguments);
+	static void runPhaser(PhaserCommandLineArgs const& _arguments);
 	static void runAlgorithm(
-		boost::program_options::variables_map const& _arguments,
+		PhaserCommandLineArgs const& _arguments,
 		Population _population,
 		std::vector<std::shared_ptr<ProgramCache>> _programCaches
 	);
 	static void printOptimisedProgramsOrASTs(
-		boost::program_options::variables_map const& _arguments,
+		PhaserCommandLineArgs const& _arguments,
 		Population const& _population,
 		std::vector<Program> _programs,
 		PhaserMode phaserMode

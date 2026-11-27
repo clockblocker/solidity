@@ -1,13 +1,13 @@
 add_subdirectory(yulFactAuditor)
 add_subdirectory(yulInterpreter)
 add_executable(yulrun yulrun.cpp)
-target_link_libraries(yulrun PRIVATE yulInterpreter libsolc evmasm Boost::boost Boost::program_options)
+target_link_libraries(yulrun PRIVATE yulInterpreter libsolc evmasm reflectcpp Boost::boost)
 
 add_executable(solfuzzer afl_fuzzer.cpp fuzzer_common.cpp)
-target_link_libraries(solfuzzer PRIVATE libsolc evmasm Boost::boost Boost::program_options ${Boost_SYSTEM_LIBRARY})
+target_link_libraries(solfuzzer PRIVATE libsolc evmasm reflectcpp Boost::boost ${Boost_SYSTEM_LIBRARY})
 
 add_executable(yulopti yulopti.cpp)
-target_link_libraries(yulopti PRIVATE solidity yulFactAuditor Boost::boost Boost::program_options ${Boost_SYSTEM_LIBRARY})
+target_link_libraries(yulopti PRIVATE solidity yulFactAuditor reflectcpp Boost::boost ${Boost_SYSTEM_LIBRARY})
 
 add_executable(isoltest
 	isoltest.cpp
@@ -70,4 +70,4 @@ add_executable(isoltest
 	../libyul/ssa/StackShufflerTest.h
 )
 target_compile_definitions(isoltest PRIVATE ISOLTEST)
-target_link_libraries(isoltest PRIVATE evmc libsolc solidity yulInterpreter evmasm Boost::boost Boost::program_options Boost::unit_test_framework Threads::Threads)
+target_link_libraries(isoltest PRIVATE evmc libsolc solidity yulInterpreter evmasm reflectcpp Boost::boost Boost::unit_test_framework Threads::Threads)

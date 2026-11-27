@@ -35,6 +35,9 @@
 #include <libsolutil/CommonData.h>
 #include <libsolutil/CommonIO.h>
 
+#include <rfl.hpp>
+#include <rfl/cli.hpp>
+
 #include <iostream>
 
 using namespace solidity;
@@ -42,8 +45,6 @@ using namespace solidity::langutil;
 using namespace solidity::util;
 using namespace solidity::yul;
 using namespace solidity::phaser;
-
-namespace po = boost::program_options;
 
 namespace
 {
@@ -88,7 +89,160 @@ std::map<CrossoverChoice, std::string> const CrossoverChoiceToStringMap =
 };
 std::map<std::string, CrossoverChoice> const StringToCrossoverChoiceMap = invertMap(CrossoverChoiceToStringMap);
 
+template <class Enum>
+Enum parseChoice(std::string const& _value, std::map<std::string, Enum> const& _map, char const* _optName)
+{
+	auto const it = _map.find(_value);
+	assertThrow(it != _map.end(), BadInput, std::string("Invalid value '") + _value + "' for --" + _optName + ".");
+	return it->second;
 }
+
+template <rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T>
+using PhaserOpt = rfl::cli::Arg<T, rfl::cli::attr::ValueName<VN>, rfl::cli::attr::Desc<Desc>>;
+
+template <rfl::internal::StringLiteral Desc>
+using PhaserFlag = rfl::cli::Flag<rfl::cli::attr::Desc<Desc>>;
+
+template <rfl::internal::StringLiteral VN>
+using WeightOpt = rfl::cli::Arg<size_t, rfl::cli::attr::ValueName<VN>>;
+
+struct GeneralArgs
+{
+	rfl::cli::Arg<std::optional<std::vector<std::string>>,
+		rfl::cli::attr::Positional, rfl::cli::attr::ValueName<"<PATH>">,
+		rfl::cli::attr::Desc<"Input files.">> input_files;
+	PhaserOpt<"<CHROMOSOME>",
+		"Initial optimisation steps automatically applied to every input program.\n"
+		"The result is treated as if it was the actual input, i.e. the steps are not considered "
+		"a part of the chromosomes and cannot be mutated. The values of relative metric values "
+		"are also relative to the fitness of a program with these steps applied rather than the "
+		"fitness of the original program.\n"
+		"Note that phaser always adds a 'hgo' prefix to ensure that chromosomes can "
+		"contain arbitrary optimisation steps. This implicit prefix cannot be changed or "
+		"removed using this option. The value given here is applied after it.",
+		std::string> prefix = "";
+	PhaserOpt<"<NUM>", "Seed for the random number generator.", std::optional<uint32_t>> seed;
+	PhaserOpt<"<NUM>", "The number of rounds after which the algorithm should stop. (default=no limit).", std::optional<size_t>> rounds;
+	PhaserOpt<"<NAME>",
+		"Mode of operation (run-algorithm, print-optimised-programs, print-optimised-asts).",
+		std::string> mode = "run-algorithm";
+};
+
+struct AlgorithmArgs
+{
+	PhaserOpt<"<NAME>", "Algorithm (GEWEP, classic, random).", std::string> algorithm = "GEWEP";
+	PhaserFlag<
+		"By default, after each round of the algorithm duplicate chromosomes are removed from "
+		"the population and replaced with randomly generated ones. "
+		"This option disables this postprocessing."> no_randomise_duplicates = false;
+	PhaserOpt<"<NUM>", "Minimum length of randomly generated chromosomes.", size_t> min_chromosome_length = 100;
+	PhaserOpt<"<NUM>", "Maximum length of randomly generated chromosomes.", size_t> max_chromosome_length = 100;
+	PhaserOpt<"<NAME>", "Type of the crossover operator to use (single-point, two-point, uniform).", std::string> crossover = "uniform";
+	PhaserOpt<"<PROBABILITY>", "Chance of two genes being swapped between chromosomes in uniform crossover.", double> uniform_crossover_swap_chance = 0.5;
+};
+
+struct GewepArgs
+{
+	PhaserOpt<"<FRACTION>", "Percentage of population to regenerate using mutations in each round.", double> gewep_mutation_pool_size = 0.25;
+	PhaserOpt<"<FRACTION>", "Percentage of population to regenerate using crossover in each round.", double> gewep_crossover_pool_size = 0.25;
+	PhaserOpt<"<PROBABILITY>", "The chance of choosing gene randomisation as the mutation to perform.", double> gewep_randomisation_chance = 0.9;
+	PhaserOpt<"<PROBABILITY>", "The chance of choosing gene deletion as the mutation if randomisation was not chosen.", double> gewep_deletion_vs_addition_chance = 0.5;
+	PhaserOpt<"<PROBABILITY>", "The chance of any given gene being mutated in gene randomisation. (default=1/max-chromosome-length)", std::optional<double>> gewep_genes_to_randomise;
+	PhaserOpt<"<PROBABILITY>", "The chance of a gene being added (or deleted) in gene addition (or deletion). (default=1/max-chromosome-length)", std::optional<double>> gewep_genes_to_add_or_delete;
+};
+
+struct ClassicArgs
+{
+	PhaserOpt<"<FRACTION>", "Percentage of population to regenerate using mutations in each round.", double> classic_elite_pool_size = 0.25;
+	PhaserOpt<"<FRACTION>", "Chance of a chromosome being selected for crossover.", double> classic_crossover_chance = 0.75;
+	PhaserOpt<"<FRACTION>", "Chance of a gene being mutated.", double> classic_mutation_chance = 0.01;
+	PhaserOpt<"<PROBABILITY>", "Chance of a gene being deleted.", double> classic_deletion_chance = 0.01;
+	PhaserOpt<"<PROBABILITY>", "Chance of a random gene being added.", double> classic_addition_chance = 0.01;
+};
+
+struct RandomArgs
+{
+	PhaserOpt<"<FRACTION>",
+		"Percentage of the population preserved in each round. (default=one individual, regardless of population size)",
+		std::optional<double>> random_elite_pool_size;
+};
+
+struct PopulationArgs
+{
+	rfl::cli::Arg<std::optional<std::vector<std::string>>,
+		rfl::cli::attr::MultiToken, rfl::cli::attr::ValueName<"<CHROMOSOMES>">,
+		rfl::cli::attr::Desc<
+			"List of chromosomes to be included in the initial population. "
+			"You can specify multiple values separated with spaces or invoke the option multiple times "
+			"and all the values will be included.">> population;
+	PhaserOpt<"<SIZE>", "The number of randomly generated chromosomes to be included in the initial population.", std::optional<std::vector<size_t>>> random_population;
+	PhaserOpt<"<FILE>", "A text file with a list of chromosomes (one per line) to be included in the initial population.", std::optional<std::vector<std::string>>> population_from_file;
+	PhaserOpt<"<FILE>", "If specified, the population is saved in the specified file after each round. (default=autosave disabled)", std::optional<std::string>> population_autosave;
+};
+
+struct MetricsArgs
+{
+	PhaserOpt<"<NAME>", "Metric used to evaluate the fitness of a chromosome (code-size, relative-code-size).", std::string> metric = "relative-code-size";
+	PhaserOpt<"<NAME>", "Operator used to combine multiple fitness metric values (average, sum, maximum, minimum).", std::string> metric_aggregator = "average";
+	PhaserOpt<"<EXPONENT>", "Scaling factor for values produced by relative fitness metrics.", size_t> relative_metric_scale = 3;
+	PhaserOpt<"<COUNT>", "Number of times to repeat the sequence optimisation steps represented by a chromosome.", size_t> chromosome_repetitions = 1;
+};
+
+struct MetricWeightArgs
+{
+	WeightOpt<"<COST>"> expression_statement_cost = 1;
+	WeightOpt<"<COST>"> assignment_cost = 1;
+	WeightOpt<"<COST>"> variable_declaration_cost = 1;
+	WeightOpt<"<COST>"> function_definition_cost = 1;
+	WeightOpt<"<COST>"> if_cost = 2;
+	WeightOpt<"<COST>"> switch_cost = 1;
+	WeightOpt<"<COST>"> case_cost = 2;
+	WeightOpt<"<COST>"> for_loop_cost = 3;
+	WeightOpt<"<COST>"> break_cost = 2;
+	WeightOpt<"<COST>"> continue_cost = 2;
+	WeightOpt<"<COST>"> leave_cost = 2;
+	WeightOpt<"<COST>"> block_cost = 1;
+	WeightOpt<"<COST>"> function_call_cost = 1;
+	WeightOpt<"<COST>"> identifier_cost = 1;
+	WeightOpt<"<COST>"> literal_cost = 1;
+};
+
+struct CacheAndOutputArgs
+{
+	rfl::cli::Flag<rfl::cli::attr::Group<"CACHE">,
+		rfl::cli::attr::Desc<"Enables caching of intermediate programs corresponding to chromosome prefixes.">> program_cache = false;
+	PhaserFlag<"Print the state of the population before the algorithm starts."> show_initial_population = false;
+	PhaserFlag<"Print only the best chromosome found in each round rather than the whole population."> show_only_top_chromosome = false;
+	PhaserFlag<"Hide information about the current round (round number and elapsed time)."> hide_round = false;
+	PhaserFlag<"Print information about cache size and effectiveness after each round."> show_cache_stats = false;
+	PhaserFlag<"Print the selected random seed."> show_seed = false;
+};
+
+using PhaserCli = rfl::Processors<
+	rfl::cli::App<"", "", "", rfl::cli::BuiltinHelp::long_only>,
+	rfl::cli::GnuStyle,
+	rfl::cli::ListDelimiter<"">
+>;
+
+} // namespace
+
+namespace solidity::phaser
+{
+
+struct PhaserCommandLineArgs
+{
+	rfl::cli::OptGroup<"GENERAL", GeneralArgs> general;
+	rfl::cli::OptGroup<"ALGORITHM", AlgorithmArgs> algorithm;
+	rfl::cli::OptGroup<"GEWEP ALGORITHM", GewepArgs> gewep;
+	rfl::cli::OptGroup<"CLASSIC GENETIC ALGORITHM", ClassicArgs> classic;
+	rfl::cli::OptGroup<"RANDOM ALGORITHM", RandomArgs> random;
+	rfl::cli::OptGroup<"POPULATION", PopulationArgs> population;
+	rfl::cli::OptGroup<"METRICS", MetricsArgs> metrics;
+	rfl::cli::OptGroup<"METRIC WEIGHTS", MetricWeightArgs> weights;
+	rfl::cli::OptGroup<"OUTPUT", CacheAndOutputArgs> cache_output;
+};
+
+} // namespace solidity::phaser
 
 std::istream& phaser::operator>>(std::istream& _inputStream, PhaserMode& _phaserMode) { return deserializeChoice(_inputStream, _phaserMode, StringToPhaserModeMap); }
 std::ostream& phaser::operator<<(std::ostream& _outputStream, PhaserMode _phaserMode) { return serializeChoice(_outputStream, _phaserMode, PhaserModeToStringMap); }
@@ -101,32 +255,30 @@ std::ostream& phaser::operator<<(std::ostream& _outputStream, MetricAggregatorCh
 std::istream& phaser::operator>>(std::istream& _inputStream, CrossoverChoice& _crossover) { return deserializeChoice(_inputStream, _crossover, StringToCrossoverChoiceMap); }
 std::ostream& phaser::operator<<(std::ostream& _outputStream, CrossoverChoice _crossover) { return serializeChoice(_outputStream, _crossover, CrossoverChoiceToStringMap); }
 
-GeneticAlgorithmFactory::Options GeneticAlgorithmFactory::Options::fromCommandLine(po::variables_map const& _arguments)
+GeneticAlgorithmFactory::Options GeneticAlgorithmFactory::Options::fromCommandLine(PhaserCommandLineArgs const& _arguments)
 {
+	auto const& alg = _arguments.algorithm.value();
+	auto const& gewep = _arguments.gewep.value();
+	auto const& classic = _arguments.classic.value();
+	auto const& random = _arguments.random.value();
 	return {
-		_arguments["algorithm"].as<Algorithm>(),
-		_arguments["min-chromosome-length"].as<size_t>(),
-		_arguments["max-chromosome-length"].as<size_t>(),
-		_arguments["crossover"].as<CrossoverChoice>(),
-		_arguments["uniform-crossover-swap-chance"].as<double>(),
-		_arguments.count("random-elite-pool-size") > 0 ?
-			_arguments["random-elite-pool-size"].as<double>() :
-			std::optional<double>{},
-		_arguments["gewep-mutation-pool-size"].as<double>(),
-		_arguments["gewep-crossover-pool-size"].as<double>(),
-		_arguments["gewep-randomisation-chance"].as<double>(),
-		_arguments["gewep-deletion-vs-addition-chance"].as<double>(),
-		_arguments.count("gewep-genes-to-randomise") > 0 ?
-			_arguments["gewep-genes-to-randomise"].as<double>() :
-			std::optional<double>{},
-		_arguments.count("gewep-genes-to-add-or-delete") > 0 ?
-			_arguments["gewep-genes-to-add-or-delete"].as<double>() :
-			std::optional<double>{},
-		_arguments["classic-elite-pool-size"].as<double>(),
-		_arguments["classic-crossover-chance"].as<double>(),
-		_arguments["classic-mutation-chance"].as<double>(),
-		_arguments["classic-deletion-chance"].as<double>(),
-		_arguments["classic-addition-chance"].as<double>(),
+		parseChoice(rfl::unwrap(alg.algorithm), StringToAlgorithmMap, "algorithm"),
+		rfl::unwrap(alg.min_chromosome_length),
+		rfl::unwrap(alg.max_chromosome_length),
+		parseChoice(rfl::unwrap(alg.crossover), StringToCrossoverChoiceMap, "crossover"),
+		rfl::unwrap(alg.uniform_crossover_swap_chance),
+		rfl::unwrap(random.random_elite_pool_size),
+		rfl::unwrap(gewep.gewep_mutation_pool_size),
+		rfl::unwrap(gewep.gewep_crossover_pool_size),
+		rfl::unwrap(gewep.gewep_randomisation_chance),
+		rfl::unwrap(gewep.gewep_deletion_vs_addition_chance),
+		rfl::unwrap(gewep.gewep_genes_to_randomise),
+		rfl::unwrap(gewep.gewep_genes_to_add_or_delete),
+		rfl::unwrap(classic.classic_elite_pool_size),
+		rfl::unwrap(classic.classic_crossover_chance),
+		rfl::unwrap(classic.classic_mutation_chance),
+		rfl::unwrap(classic.classic_deletion_chance),
+		rfl::unwrap(classic.classic_addition_chance),
 	};
 }
 
@@ -190,34 +342,36 @@ std::unique_ptr<GeneticAlgorithm> GeneticAlgorithmFactory::build(
 	}
 }
 
-CodeWeights CodeWeightFactory::buildFromCommandLine(po::variables_map const& _arguments)
+CodeWeights CodeWeightFactory::buildFromCommandLine(PhaserCommandLineArgs const& _arguments)
 {
+	auto const& w = _arguments.weights.value();
 	return {
-		_arguments["expression-statement-cost"].as<size_t>(),
-		_arguments["assignment-cost"].as<size_t>(),
-		_arguments["variable-declaration-cost"].as<size_t>(),
-		_arguments["function-definition-cost"].as<size_t>(),
-		_arguments["if-cost"].as<size_t>(),
-		_arguments["switch-cost"].as<size_t>(),
-		_arguments["case-cost"].as<size_t>(),
-		_arguments["for-loop-cost"].as<size_t>(),
-		_arguments["break-cost"].as<size_t>(),
-		_arguments["continue-cost"].as<size_t>(),
-		_arguments["leave-cost"].as<size_t>(),
-		_arguments["block-cost"].as<size_t>(),
-		_arguments["function-call-cost"].as<size_t>(),
-		_arguments["identifier-cost"].as<size_t>(),
-		_arguments["literal-cost"].as<size_t>(),
+		rfl::unwrap(w.expression_statement_cost),
+		rfl::unwrap(w.assignment_cost),
+		rfl::unwrap(w.variable_declaration_cost),
+		rfl::unwrap(w.function_definition_cost),
+		rfl::unwrap(w.if_cost),
+		rfl::unwrap(w.switch_cost),
+		rfl::unwrap(w.case_cost),
+		rfl::unwrap(w.for_loop_cost),
+		rfl::unwrap(w.break_cost),
+		rfl::unwrap(w.continue_cost),
+		rfl::unwrap(w.leave_cost),
+		rfl::unwrap(w.block_cost),
+		rfl::unwrap(w.function_call_cost),
+		rfl::unwrap(w.identifier_cost),
+		rfl::unwrap(w.literal_cost),
 	};
 }
 
-FitnessMetricFactory::Options FitnessMetricFactory::Options::fromCommandLine(po::variables_map const& _arguments)
+FitnessMetricFactory::Options FitnessMetricFactory::Options::fromCommandLine(PhaserCommandLineArgs const& _arguments)
 {
+	auto const& m = _arguments.metrics.value();
 	return {
-		_arguments["metric"].as<MetricChoice>(),
-		_arguments["metric-aggregator"].as<MetricAggregatorChoice>(),
-		_arguments["relative-metric-scale"].as<size_t>(),
-		_arguments["chromosome-repetitions"].as<size_t>(),
+		parseChoice(rfl::unwrap(m.metric), StringToMetricChoiceMap, "metric"),
+		parseChoice(rfl::unwrap(m.metric_aggregator), StringToMetricAggregatorChoiceMap, "metric-aggregator"),
+		rfl::unwrap(m.relative_metric_scale),
+		rfl::unwrap(m.chromosome_repetitions),
 	};
 }
 
@@ -280,20 +434,16 @@ std::unique_ptr<FitnessMetric> FitnessMetricFactory::build(
 	util::unreachable();
 }
 
-PopulationFactory::Options PopulationFactory::Options::fromCommandLine(po::variables_map const& _arguments)
+PopulationFactory::Options PopulationFactory::Options::fromCommandLine(PhaserCommandLineArgs const& _arguments)
 {
+	auto const& alg = _arguments.algorithm.value();
+	auto const& pop = _arguments.population.value();
 	return {
-		_arguments["min-chromosome-length"].as<size_t>(),
-		_arguments["max-chromosome-length"].as<size_t>(),
-		_arguments.count("population") > 0 ?
-			_arguments["population"].as<std::vector<std::string>>() :
-			std::vector<std::string>{},
-		_arguments.count("random-population") > 0 ?
-			_arguments["random-population"].as<std::vector<size_t>>() :
-			std::vector<size_t>{},
-		_arguments.count("population-from-file") > 0 ?
-			_arguments["population-from-file"].as<std::vector<std::string>>() :
-			std::vector<std::string>{},
+		rfl::unwrap(alg.min_chromosome_length),
+		rfl::unwrap(alg.max_chromosome_length),
+		rfl::unwrap(pop.population).value_or(std::vector<std::string>{}),
+		rfl::unwrap(pop.random_population).value_or(std::vector<size_t>{}),
+		rfl::unwrap(pop.population_from_file).value_or(std::vector<std::string>{}),
 	};
 }
 
@@ -356,10 +506,10 @@ Population PopulationFactory::buildFromFile(
 	return buildFromStrings(readLinesFromFile(_filePath), std::move(_fitnessMetric));
 }
 
-ProgramCacheFactory::Options ProgramCacheFactory::Options::fromCommandLine(po::variables_map const& _arguments)
+ProgramCacheFactory::Options ProgramCacheFactory::Options::fromCommandLine(PhaserCommandLineArgs const& _arguments)
 {
 	return {
-		_arguments["program-cache"].as<bool>(),
+		rfl::unwrap(_arguments.cache_output.value().program_cache),
 	};
 }
 
@@ -375,11 +525,12 @@ std::vector<std::shared_ptr<ProgramCache>> ProgramCacheFactory::build(
 	return programCaches;
 }
 
-ProgramFactory::Options ProgramFactory::Options::fromCommandLine(po::variables_map const& _arguments)
+ProgramFactory::Options ProgramFactory::Options::fromCommandLine(PhaserCommandLineArgs const& _arguments)
 {
+	auto const& gen = _arguments.general.value();
 	return {
-		_arguments["input-files"].as<std::vector<std::string>>(),
-		_arguments["prefix"].as<std::string>(),
+		rfl::unwrap(gen.input_files).value_or(std::vector<std::string>{}),
+		rfl::unwrap(gen.prefix),
 	};
 }
 
@@ -415,398 +566,72 @@ CharStream ProgramFactory::loadSource(boost::filesystem::path const& _sourcePath
 
 void Phaser::main(int _argc, char** _argv)
 {
-	std::optional<po::variables_map> arguments = parseCommandLine(_argc, _argv);
-	if (!arguments.has_value())
+	auto arguments = parseCommandLine(_argc, _argv);
+	if (!arguments)
 		return;
 
-	initialiseRNG(arguments.value());
-
-	runPhaser(arguments.value());
+	initialiseRNG(*arguments);
+	runPhaser(*arguments);
 }
 
-Phaser::CommandLineDescription Phaser::buildCommandLineDescription()
+std::unique_ptr<PhaserCommandLineArgs> Phaser::parseCommandLine(int _argc, char** _argv)
 {
-	unsigned const lineLength = po::options_description::m_default_line_length;
-	unsigned const minDescriptionLength = lineLength - 23;
+	rfl::cli::UsageOptions const usageOpts{
+		.detailed = true,
+		.header = "yul-phaser, a tool for finding the best sequence of Yul optimisation phases.",
+		.synopsis = "yul-phaser [options] <file>",
+		.description =
+			"Reads <file> as Yul code and tries to find the best order in which to run optimisation "
+			"phases using a genetic algorithm.\n"
+			"Example:\n"
+			"yul-phaser program.yul",
+		.help_group = "GENERAL",
+	};
 
-	po::options_description keywordDescription(
-		"yul-phaser, a tool for finding the best sequence of Yul optimisation phases.\n"
-		"\n"
-		"Usage: yul-phaser [options] <file>\n"
-		"Reads <file> as Yul code and tries to find the best order in which to run optimisation"
-		" phases using a genetic algorithm.\n"
-		"Example:\n"
-		"yul-phaser program.yul\n"
-		"\n"
-		"Allowed options",
-		lineLength,
-		minDescriptionLength
-	);
+	auto parsed = rfl::cli::read_app<PhaserCommandLineArgs, PhaserCli>(_argc, _argv, usageOpts);
+	assertThrow(parsed.has_value(), BadInput, parsed.error().what());
 
-	po::options_description generalDescription("GENERAL", lineLength, minDescriptionLength);
-	generalDescription.add_options()
-		("help", "Show help message and exit.")
-		("input-files", po::value<std::vector<std::string>>()->required()->value_name("<PATH>"), "Input files.")
-		(
-			"prefix",
-			po::value<std::string>()->value_name("<CHROMOSOME>")->default_value(""),
-			"Initial optimisation steps automatically applied to every input program.\n"
-			"The result is treated as if it was the actual input, i.e. the steps are not considered "
-			"a part of the chromosomes and cannot be mutated. The values of relative metric values "
-			"are also relative to the fitness of a program with these steps applied rather than the "
-			"fitness of the original program.\n"
-			"Note that phaser always adds a 'hgo' prefix to ensure that chromosomes can "
-			"contain arbitrary optimisation steps. This implicit prefix cannot be changed or "
-			"or removed using this option. The value given here is applied after it."
-		)
-		("seed", po::value<uint32_t>()->value_name("<NUM>"), "Seed for the random number generator.")
-		(
-			"rounds",
-			po::value<size_t>()->value_name("<NUM>"),
-			"The number of rounds after which the algorithm should stop. (default=no limit)."
-		)
-		(
-			"mode",
-			po::value<PhaserMode>()->value_name("<NAME>")->default_value(PhaserMode::RunAlgorithm),
-			(
-				"Mode of operation. The default is to run the algorithm but you can also tell phaser "
-				"to do something else with its parameters, e.g. just print the optimised programs and exit.\n"
-				"\n"
-				"AVAILABLE MODES:\n"
-				"* " + toString(PhaserMode::RunAlgorithm) + "\n" +
-				"* " + toString(PhaserMode::PrintOptimisedPrograms) + "\n" +
-				"* " + toString(PhaserMode::PrintOptimisedASTs)
-			).c_str()
-		)
-	;
-	keywordDescription.add(generalDescription);
-
-	po::options_description algorithmDescription("ALGORITHM", lineLength, minDescriptionLength);
-	algorithmDescription.add_options()
-		(
-			"algorithm",
-			po::value<Algorithm>()->value_name("<NAME>")->default_value(Algorithm::GEWEP),
-			(
-				"Algorithm\n"
-				"\n"
-				"AVAILABLE ALGORITHMS:\n"
-				"* " + toString(Algorithm::GEWEP) + "\n" +
-				"* " + toString(Algorithm::Classic) + "\n" +
-				"* " + toString(Algorithm::Random)
-			).c_str()
-		)
-		(
-			"no-randomise-duplicates",
-			po::bool_switch(),
-			"By default, after each round of the algorithm duplicate chromosomes are removed from"
-			"the population and replaced with randomly generated ones. "
-			"This option disables this postprocessing."
-		)
-		(
-			"min-chromosome-length",
-			po::value<size_t>()->value_name("<NUM>")->default_value(100),
-			"Minimum length of randomly generated chromosomes."
-		)
-		(
-			"max-chromosome-length",
-			po::value<size_t>()->value_name("<NUM>")->default_value(100),
-			"Maximum length of randomly generated chromosomes."
-		)
-		(
-			"crossover",
-			po::value<CrossoverChoice>()->value_name("<NAME>")->default_value(CrossoverChoice::Uniform),
-			(
-				"Type of the crossover operator to use.\n"
-				"\n"
-				"AVAILABLE CROSSOVER OPERATORS:\n"
-				"* " + toString(CrossoverChoice::SinglePoint) + "\n" +
-				"* " + toString(CrossoverChoice::TwoPoint) + "\n" +
-				"* " + toString(CrossoverChoice::Uniform)
-			).c_str()
-		)
-		(
-			"uniform-crossover-swap-chance",
-			po::value<double>()->value_name("<PROBABILITY>")->default_value(0.5),
-			"Chance of two genes being swapped between chromosomes in uniform crossover."
-		)
-	;
-	keywordDescription.add(algorithmDescription);
-
-	po::options_description gewepAlgorithmDescription("GEWEP ALGORITHM", lineLength, minDescriptionLength);
-	gewepAlgorithmDescription.add_options()
-		(
-			"gewep-mutation-pool-size",
-			po::value<double>()->value_name("<FRACTION>")->default_value(0.25),
-			"Percentage of population to regenerate using mutations in each round."
-		)
-		(
-			"gewep-crossover-pool-size",
-			po::value<double>()->value_name("<FRACTION>")->default_value(0.25),
-			"Percentage of population to regenerate using crossover in each round."
-		)
-		(
-			"gewep-randomisation-chance",
-			po::value<double>()->value_name("<PROBABILITY>")->default_value(0.9),
-			"The chance of choosing gene randomisation as the mutation to perform."
-		)
-		(
-			"gewep-deletion-vs-addition-chance",
-			po::value<double>()->value_name("<PROBABILITY>")->default_value(0.5),
-			"The chance of choosing gene deletion as the mutation if randomisation was not chosen."
-		)
-		(
-			"gewep-genes-to-randomise",
-			po::value<double>()->value_name("<PROBABILITY>"),
-			"The chance of any given gene being mutated in gene randomisation. "
-			"(default=1/max-chromosome-length)"
-		)
-		(
-			"gewep-genes-to-add-or-delete",
-			po::value<double>()->value_name("<PROBABILITY>"),
-			"The chance of a gene being added (or deleted) in gene addition (or deletion). "
-			"(default=1/max-chromosome-length)"
-		)
-	;
-	keywordDescription.add(gewepAlgorithmDescription);
-
-	po::options_description classicGeneticAlgorithmDescription("CLASSIC GENETIC ALGORITHM", lineLength, minDescriptionLength);
-	classicGeneticAlgorithmDescription.add_options()
-		(
-			"classic-elite-pool-size",
-			po::value<double>()->value_name("<FRACTION>")->default_value(0.25),
-			"Percentage of population to regenerate using mutations in each round."
-		)
-		(
-			"classic-crossover-chance",
-			po::value<double>()->value_name("<FRACTION>")->default_value(0.75),
-			"Chance of a chromosome being selected for crossover."
-		)
-		(
-			"classic-mutation-chance",
-			po::value<double>()->value_name("<FRACTION>")->default_value(0.01),
-			"Chance of a gene being mutated."
-		)
-		(
-			"classic-deletion-chance",
-			po::value<double>()->value_name("<PROBABILITY>")->default_value(0.01),
-			"Chance of a gene being deleted."
-		)
-		(
-			"classic-addition-chance",
-			po::value<double>()->value_name("<PROBABILITY>")->default_value(0.01),
-			"Chance of a random gene being added."
-		)
-	;
-	keywordDescription.add(classicGeneticAlgorithmDescription);
-
-	po::options_description randomAlgorithmDescription("RANDOM ALGORITHM", lineLength, minDescriptionLength);
-	randomAlgorithmDescription.add_options()
-		(
-			"random-elite-pool-size",
-			po::value<double>()->value_name("<FRACTION>"),
-			"Percentage of the population preserved in each round. "
-			"(default=one individual, regardless of population size)"
-		)
-	;
-	keywordDescription.add(randomAlgorithmDescription);
-
-	po::options_description populationDescription("POPULATION", lineLength, minDescriptionLength);
-	populationDescription.add_options()
-		(
-			"population",
-			po::value<std::vector<std::string>>()->multitoken()->value_name("<CHROMOSOMES>"),
-			"List of chromosomes to be included in the initial population. "
-			"You can specify multiple values separated with spaces or invoke the option multiple times "
-			"and all the values will be included."
-		)
-		(
-			"random-population",
-			po::value<std::vector<size_t>>()->value_name("<SIZE>"),
-			"The number of randomly generated chromosomes to be included in the initial population."
-		)
-		(
-			"population-from-file",
-			po::value<std::vector<std::string>>()->value_name("<FILE>"),
-			"A text file with a list of chromosomes (one per line) to be included in the initial population."
-		)
-		(
-			"population-autosave",
-			po::value<std::string>()->value_name("<FILE>"),
-			"If specified, the population is saved in the specified file after each round. (default=autosave disabled)"
-		)
-	;
-	keywordDescription.add(populationDescription);
-
-	po::options_description metricsDescription("METRICS", lineLength, minDescriptionLength);
-	metricsDescription.add_options()
-		(
-			"metric",
-			po::value<MetricChoice>()->value_name("<NAME>")->default_value(MetricChoice::RelativeCodeSize),
-			(
-				"Metric used to evaluate the fitness of a chromosome.\n"
-				"\n"
-				"AVAILABLE METRICS:\n"
-				"* " + toString(MetricChoice::CodeSize) + "\n" +
-				"* " + toString(MetricChoice::RelativeCodeSize)
-			).c_str()
-		)
-		(
-			"metric-aggregator",
-			po::value<MetricAggregatorChoice>()->value_name("<NAME>")->default_value(MetricAggregatorChoice::Average),
-			(
-				"Operator used to combine multiple fitness metric values obtained by evaluating a "
-				"chromosome separately for each input program.\n"
-				"\n"
-				"AVAILABLE METRIC AGGREGATORS:\n"
-				"* " + toString(MetricAggregatorChoice::Average) + "\n" +
-				"* " + toString(MetricAggregatorChoice::Sum) + "\n" +
-				"* " + toString(MetricAggregatorChoice::Maximum) + "\n" +
-				"* " + toString(MetricAggregatorChoice::Minimum)
-			).c_str()
-		)
-		(
-			"relative-metric-scale",
-			po::value<size_t>()->value_name("<EXPONENT>")->default_value(3),
-			"Scaling factor for values produced by relative fitness metrics. \n"
-			"Since all metrics must produce integer values, the fractional part of the result is discarded. "
-			"To keep the numbers meaningful, a relative metric multiples its values by a scaling factor "
-			"and this option specifies the exponent of this factor. "
-			"For example with value of 3 the factor is 10^3 = 1000 and the metric will return "
-			"500 to represent 0.5, 1000 for 1.0, 2000 for 2.0 and so on. "
-			"Using a bigger factor allows discerning smaller relative differences between chromosomes "
-			"but makes the numbers less readable and may also lose precision if the numbers are very large."
-		)
-		(
-			"chromosome-repetitions",
-			po::value<size_t>()->value_name("<COUNT>")->default_value(1),
-			"Number of times to repeat the sequence optimisation steps represented by a chromosome."
-		)
-	;
-	keywordDescription.add(metricsDescription);
-
-	po::options_description metricWeightDescription("METRIC WEIGHTS", lineLength, minDescriptionLength);
-	metricWeightDescription.add_options()
-		// TODO: We need to figure out the best set of weights for the phaser.
-		// This one is just a stopgap to make sure no statement or expression has zero cost.
-		("expression-statement-cost", po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("assignment-cost",           po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("variable-declaration-cost", po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("function-definition-cost",  po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("if-cost",                   po::value<size_t>()->value_name("<COST>")->default_value(2))
-		("switch-cost",               po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("case-cost",                 po::value<size_t>()->value_name("<COST>")->default_value(2))
-		("for-loop-cost",             po::value<size_t>()->value_name("<COST>")->default_value(3))
-		("break-cost",                po::value<size_t>()->value_name("<COST>")->default_value(2))
-		("continue-cost",             po::value<size_t>()->value_name("<COST>")->default_value(2))
-		("leave-cost",                po::value<size_t>()->value_name("<COST>")->default_value(2))
-		("block-cost",                po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("function-call-cost",        po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("identifier-cost",           po::value<size_t>()->value_name("<COST>")->default_value(1))
-		("literal-cost",              po::value<size_t>()->value_name("<COST>")->default_value(1))
-	;
-	keywordDescription.add(metricWeightDescription);
-
-	po::options_description cacheDescription("CACHE", lineLength, minDescriptionLength);
-	cacheDescription.add_options()
-		(
-			"program-cache",
-			po::bool_switch(),
-			"Enables caching of intermediate programs corresponding to chromosome prefixes.\n"
-			"This speeds up fitness evaluation by a lot but eats tons of memory if the chromosomes are long. "
-			"Disabled by default since there's currently no way to set an upper limit on memory usage but "
-			"highly recommended if your computer has enough RAM."
-		)
-	;
-	keywordDescription.add(cacheDescription);
-
-	po::options_description outputDescription("OUTPUT", lineLength, minDescriptionLength);
-	outputDescription.add_options()
-		(
-			"show-initial-population",
-			po::bool_switch(),
-			"Print the state of the population before the algorithm starts."
-		)
-		(
-			"show-only-top-chromosome",
-			po::bool_switch(),
-			"Print only the best chromosome found in each round rather than the whole population."
-		)
-		(
-			"hide-round",
-			po::bool_switch(),
-			"Hide information about the current round (round number and elapsed time)."
-		)
-		(
-			"show-cache-stats",
-			po::bool_switch(),
-			"Print information about cache size and effectiveness after each round."
-		)
-		(
-			"show-seed",
-			po::bool_switch(),
-			"Print the selected random seed."
-		)
-	;
-	keywordDescription.add(outputDescription);
-
-	po::positional_options_description positionalDescription;
-	positionalDescription.add("input-files", -1);
-
-	return {keywordDescription, positionalDescription};
-}
-
-std::optional<po::variables_map> Phaser::parseCommandLine(int _argc, char** _argv)
-{
-	auto [keywordDescription, positionalDescription] = buildCommandLineDescription();
-
-	po::variables_map arguments;
-	po::notify(arguments);
-
-	po::command_line_parser parser(_argc, _argv);
-	parser.options(keywordDescription).positional(positionalDescription);
-	po::store(parser.run(), arguments);
-
-	if (arguments.count("help") > 0)
+	if (auto const* info = std::get_if<rfl::cli::HelpOrVersion>(&*parsed))
 	{
-		std::cout << keywordDescription << std::endl;
-		return std::nullopt;
+		std::cout << info->text << std::endl;
+		return nullptr;
 	}
 
-	if (arguments.count("input-files") == 0)
-		assertThrow(false, NoInputFiles, "Missing argument: input-files.");
+	auto args = std::make_unique<PhaserCommandLineArgs>(std::move(std::get<PhaserCommandLineArgs>(*parsed)));
+	auto const& inputFiles = rfl::unwrap(args->general.value().input_files);
+	assertThrow(inputFiles.has_value() && !inputFiles->empty(), NoInputFiles, "Missing argument: input-files.");
 
-	return arguments;
+	return args;
 }
 
-void Phaser::initialiseRNG(po::variables_map const& _arguments)
+void Phaser::initialiseRNG(PhaserCommandLineArgs const& _arguments)
 {
-	uint32_t seed;
-	if (_arguments.count("seed") > 0)
-		seed = _arguments["seed"].as<uint32_t>();
-	else
-		seed = SimulationRNG::generateSeed();
-
+	uint32_t seed = rfl::unwrap(_arguments.general.value().seed).value_or(SimulationRNG::generateSeed());
 	SimulationRNG::reset(seed);
-	if (_arguments["show-seed"].as<bool>())
+	if (rfl::unwrap(_arguments.cache_output.value().show_seed))
 		std::cout << "Random seed: " << seed << std::endl;
 }
 
-AlgorithmRunner::Options Phaser::buildAlgorithmRunnerOptions(po::variables_map const& _arguments)
+AlgorithmRunner::Options Phaser::buildAlgorithmRunnerOptions(PhaserCommandLineArgs const& _arguments)
 {
+	auto const& gen = _arguments.general.value();
+	auto const& alg = _arguments.algorithm.value();
+	auto const& pop = _arguments.population.value();
+	auto const& out = _arguments.cache_output.value();
 	return {
-		_arguments.count("rounds") > 0 ? static_cast<std::optional<size_t>>(_arguments["rounds"].as<size_t>()) : std::nullopt,
-		_arguments.count("population-autosave") > 0 ? static_cast<std::optional<std::string>>(_arguments["population-autosave"].as<std::string>()) : std::nullopt,
-		!_arguments["no-randomise-duplicates"].as<bool>(),
-		_arguments["min-chromosome-length"].as<size_t>(),
-		_arguments["max-chromosome-length"].as<size_t>(),
-		_arguments["show-initial-population"].as<bool>(),
-		_arguments["show-only-top-chromosome"].as<bool>(),
-		!_arguments["hide-round"].as<bool>(),
-		_arguments["show-cache-stats"].as<bool>(),
+		rfl::unwrap(gen.rounds),
+		rfl::unwrap(pop.population_autosave),
+		!rfl::unwrap(alg.no_randomise_duplicates),
+		rfl::unwrap(alg.min_chromosome_length),
+		rfl::unwrap(alg.max_chromosome_length),
+		rfl::unwrap(out.show_initial_population),
+		rfl::unwrap(out.show_only_top_chromosome),
+		!rfl::unwrap(out.hide_round),
+		rfl::unwrap(out.show_cache_stats),
 	};
 }
 
-void Phaser::runPhaser(po::variables_map const& _arguments)
+void Phaser::runPhaser(PhaserCommandLineArgs const& _arguments)
 {
 	auto programOptions = ProgramFactory::Options::fromCommandLine(_arguments);
 	auto cacheOptions = ProgramCacheFactory::Options::fromCommandLine(_arguments);
@@ -824,14 +649,15 @@ void Phaser::runPhaser(po::variables_map const& _arguments)
 	);
 	Population population = PopulationFactory::build(populationOptions, std::move(fitnessMetric));
 
-	if (_arguments["mode"].as<PhaserMode>() == PhaserMode::RunAlgorithm)
+	PhaserMode const mode = parseChoice(rfl::unwrap(_arguments.general.value().mode), StringToPhaserModeMap, "mode");
+	if (mode == PhaserMode::RunAlgorithm)
 		runAlgorithm(_arguments, std::move(population), std::move(programCaches));
 	else
-		printOptimisedProgramsOrASTs(_arguments, population, std::move(programs), _arguments["mode"].as<PhaserMode>());
+		printOptimisedProgramsOrASTs(_arguments, population, std::move(programs), mode);
 }
 
 void Phaser::runAlgorithm(
-	po::variables_map const& _arguments,
+	PhaserCommandLineArgs const& _arguments,
 	Population _population,
 	std::vector<std::shared_ptr<ProgramCache>> _programCaches
 )
@@ -848,14 +674,15 @@ void Phaser::runAlgorithm(
 }
 
 void Phaser::printOptimisedProgramsOrASTs(
-	po::variables_map const& _arguments,
+	PhaserCommandLineArgs const& _arguments,
 	Population const& _population,
 	std::vector<Program> _programs,
 	PhaserMode phaserMode
 )
 {
+	auto const& paths = *rfl::unwrap(_arguments.general.value().input_files);
 	assert(phaserMode == PhaserMode::PrintOptimisedPrograms || phaserMode == PhaserMode::PrintOptimisedASTs);
-	assert(_programs.size() == _arguments["input-files"].as<std::vector<std::string>>().size());
+	assert(_programs.size() == paths.size());
 
 	if (_population.individuals().size() == 0)
 	{
@@ -863,14 +690,14 @@ void Phaser::printOptimisedProgramsOrASTs(
 		return;
 	}
 
-	std::vector<std::string> const& paths = _arguments["input-files"].as<std::vector<std::string>>();
+	size_t const repetitions = rfl::unwrap(_arguments.metrics.value().chromosome_repetitions);
 	for (auto& individual: _population.individuals())
 	{
 		std::cout << "Chromosome: " << individual.chromosome << std::endl;
 
 		for (size_t i = 0; i < _programs.size(); ++i)
 		{
-			for (size_t j = 0; j < _arguments["chromosome-repetitions"].as<size_t>(); ++j)
+			for (size_t j = 0; j < repetitions; ++j)
 				_programs[i].optimise(individual.chromosome.optimisationSteps());
 
 			std::cout << "Program: " << paths[i] << std::endl;

@@ -26,7 +26,6 @@
 #include <test/evmc/evmc.h>
 
 #include <boost/filesystem/path.hpp>
-#include <boost/program_options.hpp>
 #include <boost/test/unit_test.hpp>
 
 namespace solidity::yul
@@ -72,7 +71,6 @@ struct CommonOptions
 	langutil::EVMVersion evmVersion() const;
 	yul::EVMDialect const& evmDialect() const;
 
-	virtual void addOptions();
 	// @returns true if the program should continue, false if it should exit immediately without
 	// reporting an error.
 	// Throws ConfigException or std::runtime_error if parsing fails.
@@ -93,7 +91,24 @@ struct CommonOptions
 	virtual ~CommonOptions() {}
 
 protected:
-	boost::program_options::options_description options;
+	void applyCommonCliArgs(
+		std::optional<std::string> const& _evmVersion,
+		std::optional<std::string> const& _testPath,
+		std::optional<std::vector<std::string>> const& _vmPaths,
+		size_t _batches,
+		size_t _selectedBatch,
+		bool _noSemanticTests,
+		bool _noSmt,
+		bool _optimize,
+		bool _enforceGasCost,
+		std::optional<std::string> const& _enforceGasCostMinValue,
+		bool _abiEncoderV1,
+		bool _showMessages,
+		bool _showMetadata,
+		std::optional<std::vector<std::string>> const& _positionals
+	);
+
+	std::string caption;
 
 private:
 	std::string evmVersionString;

@@ -33,7 +33,6 @@
 
 #include <libsolutil/JSON.h>
 
-#include <boost/program_options.hpp>
 #include <boost/filesystem/path.hpp>
 
 #include <map>
@@ -282,6 +281,11 @@ struct CommandLineOptions
 class CommandLineParser
 {
 public:
+	CommandLineParser();
+	~CommandLineParser();
+	CommandLineParser(CommandLineParser&&) noexcept;
+	CommandLineParser& operator=(CommandLineParser&&) noexcept;
+
 	/// Parses the command-line arguments and fills out the internal CommandLineOptions structure.
 	/// @throws CommandLineValidationError if the arguments cannot be properly parsed or are invalid.
 	/// When an exception is thrown, the @p CommandLineOptions may be only partially filled out.
@@ -292,23 +296,16 @@ public:
 	/// yields CLI option names (without leading "--") that require --experimental.
 	static std::vector<std::string> const& experimentalOptionNames();
 
-	static void printHelp(std::ostream& _out) { _out << optionsDescription(); }
+	static void printHelp(std::ostream& _out);
 
 private:
-	/// @returns a specification of all named command-line options accepted by the compiler.
-	/// The object can be used to parse command-line arguments or to generate the help screen.
-	static boost::program_options::options_description optionsDescription();
+	struct RawArgs;
 
-	/// @returns a specification of all positional command-line arguments accepted by the compiler.
-	/// The object can be used to parse command-line arguments or to generate the help screen.
-	static boost::program_options::positional_options_description positionalOptionsDescription();
-
-	/// Uses boost::program_options to parse the command-line arguments and leaves the result in @a m_args.
-	/// Also handles the arguments that result in information being printed followed by immediate exit.
-	/// @returns false if parsing fails due to syntactical errors or the arguments not matching the description.
+	/// Uses rfl::cli to parse the command-line arguments and leaves the result in @a m_rawArgs
+	/// and @a m_providedOptions.
 	void parseArgs(int _argc, char const* const* _argv);
 
-	/// Validates parsed arguments stored in @a m_args and fills out the internal CommandLineOptions
+	/// Validates parsed arguments stored in @a m_rawArgs and fills out the internal CommandLineOptions
 	/// structure.
 	/// @throws CommandLineValidationError in case of validation errors.
 	void processArgs();
@@ -338,9 +335,9 @@ private:
 
 	CommandLineOptions m_options;
 
-	/// Map of command-line arguments produced by boost::program_options.
-	/// Serves as input for filling out m_options.
-	boost::program_options::variables_map m_args;
+	/// Typed arguments parsed by rfl::cli and set of explicitly provided CLI option names.
+	std::unique_ptr<RawArgs> m_rawArgs;
+	std::set<std::string> m_providedOptions;
 };
 
 } // namespace solidity::frontend

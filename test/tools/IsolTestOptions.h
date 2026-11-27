@@ -36,7 +36,6 @@ struct IsolTestOptions: CommonOptions
 	std::string editor = std::string{};
 
 	explicit IsolTestOptions();
-	void addOptions() override;
 	bool parse(int _argc, char const* const* _argv) override;
 	void validate() const override;
 };
