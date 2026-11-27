@@ -63,6 +63,9 @@ public:
 	/// output. Parsing errors are returned as regular errors.
 	std::string compile(std::string const& _input) noexcept;
 
+	/// Returns the JSON Schema (Draft 2020-12) describing the Standard JSON compiler input.
+	static std::string inputSchema(util::JsonFormat const& _format = {});
+
 	static Json formatFunctionDebugData(
 		std::map<std::string, evmasm::LinkerObject::FunctionDebugData> const& _debugInfo
 	);

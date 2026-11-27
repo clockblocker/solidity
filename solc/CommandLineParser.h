@@ -55,6 +55,7 @@ enum class InputMode
 	Compiler,
 	CompilerWithASTImport,
 	StandardJson,
+	StandardJsonSchema,
 	Linker,
 	Assembler,
 	EVMAssemblerJSON

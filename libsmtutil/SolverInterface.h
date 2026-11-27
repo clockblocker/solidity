@@ -29,12 +29,14 @@
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/split.hpp>
 
+#include <array>
 #include <cstdio>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace solidity::smtutil
@@ -53,6 +55,11 @@ struct SMTSolverChoice
 	static constexpr SMTSolverChoice SMTLIB2() noexcept { return {false, false, true, false}; }
 	static constexpr SMTSolverChoice Z3() noexcept { return {false, false, false, true}; }
 	static constexpr SMTSolverChoice None() noexcept { return {false, false, false, false}; }
+
+	static constexpr std::array<std::string_view, 4> validNames() noexcept
+	{
+		return {"cvc5", "eld", "z3", "smtlib2"};
+	}
 
 	static std::optional<SMTSolverChoice> fromString(std::string const& _solvers)
 	{

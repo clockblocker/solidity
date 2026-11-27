@@ -20,8 +20,10 @@
 
 #include <libsmtutil/SolverInterface.h>
 
+#include <array>
 #include <optional>
 #include <set>
+#include <string_view>
 
 namespace solidity::frontend
 {
@@ -70,6 +72,11 @@ struct ModelCheckerEngine
 	bool any() const { return bmc || chc; }
 	bool all() const { return bmc && chc; }
 
+	static constexpr std::array<std::string_view, 4> validNames() noexcept
+	{
+		return {"all", "bmc", "chc", "none"};
+	}
+
 	static std::optional<ModelCheckerEngine> fromString(std::string const& _engine)
 	{
 		static std::map<std::string, ModelCheckerEngine> engineMap{
@@ -105,6 +112,11 @@ struct ModelCheckerInvariants
 	/// and false otherwise.
 	bool setFromString(std::string const& _target);
 
+	static constexpr std::array<std::string_view, 2> validNames() noexcept
+	{
+		return {"contract", "reentrancy"};
+	}
+
 	static std::map<std::string, InvariantType> const validInvariants;
 
 	bool operator!=(ModelCheckerInvariants const& _other) const noexcept { return !(*this == _other); }
@@ -130,6 +142,20 @@ struct ModelCheckerTargets
 	/// and false otherwise.
 	bool setFromString(std::string const& _target);
 
+	static constexpr std::array<std::string_view, 8> validNames() noexcept
+	{
+		return {
+			"constantCondition",
+			"underflow",
+			"overflow",
+			"divByZero",
+			"balance",
+			"assert",
+			"popEmptyArray",
+			"outOfBounds"
+		};
+	}
+
 	static std::map<std::string, VerificationTargetType> const targetStrings;
 
 	static std::map<VerificationTargetType, std::string> const targetTypeToString;
@@ -149,6 +175,11 @@ struct ModelCheckerExtCalls
 	};
 
 	Mode mode = Mode::UNTRUSTED;
+
+	static constexpr std::array<std::string_view, 2> validNames() noexcept
+	{
+		return {"untrusted", "trusted"};
+	}
 
 	static std::optional<ModelCheckerExtCalls> fromString(std::string const& _mode);
 

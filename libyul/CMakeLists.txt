@@ -13,6 +13,7 @@ add_library(yul
 	AsmJsonConverter.cpp
 	AsmJsonImporter.h
 	AsmJsonImporter.cpp
+	AsmJsonSchema.h
 	AsmParser.cpp
 	AsmParser.h
 	AsmPrinter.cpp
@@ -276,3 +277,4 @@ add_library(yul
 )
 
 target_link_libraries(yul PUBLIC evmasm solutil langutil smtutil fmt::fmt-header-only)
+target_link_libraries(yul PRIVATE reflectcpp)

@@ -147,6 +147,7 @@ set(libsolidity_util_sources
 detect_stray_source_files("${libsolidity_util_sources}" "libsolidity/util/")
 
 set(libyul_sources
+    libyul/AsmJson.cpp
     libyul/Common.cpp
     libyul/Common.h
     libyul/CallGraphTest.cpp
