@@ -65,11 +65,10 @@ public:
 	Json operator()(ExpressionStatement const& _node) const;
 	Json operator()(Label const& _node) const;
 
-private:
-	Json createAstNode(langutil::SourceLocation const& _originLocation, langutil::SourceLocation const& _nativeLocation, std::string _nodeType) const;
-	template <class T>
-	Json vectorOfVariantsToJson(std::vector<T> const& vec) const;
+	/// Returns the JSON Schema (Draft 2020-12) describing the Yul AST JSON format.
+	static std::string astJsonSchema(util::JsonFormat const& _format = {});
 
+private:
 	Dialect const& m_dialect;
 	std::optional<size_t> const m_sourceIndex;
 };
