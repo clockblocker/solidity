@@ -331,7 +331,6 @@ private:
 	void checkMutuallyExclusive(std::vector<std::string> const& _optionNames);
 	void checkExperimental(std::vector<std::string> const& _optionNames) const;
 	size_t countEnabledOptions(std::vector<std::string> const& _optionNames) const;
-	static std::set<std::string> collectProvidedOptions(RawArgs const& _raw);
 	static std::string joinOptionNames(std::vector<std::string> const& _optionNames, std::string _separator = ", ");
 
 	CommandLineOptions m_options;

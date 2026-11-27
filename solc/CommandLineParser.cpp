@@ -116,10 +116,10 @@ using OptStr = std::optional<std::string>;
 using OptStrVec = std::optional<std::vector<std::string>>;
 
 template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral Desc>
-using GroupFlag = rfl::Group<G, rfl::Description<Desc, Flag>>;
+using GroupFlag = rfl::cli::Opt<Flag, rfl::cli::attr::Group<G>, rfl::cli::attr::Desc<Desc>>;
 
 template <rfl::internal::StringLiteral G, rfl::internal::StringLiteral VN, rfl::internal::StringLiteral Desc, class T = OptStr>
-using GroupOpt = rfl::Group<G, rfl::ValueName<VN, rfl::Description<Desc, T>>>;
+using GroupOpt = rfl::cli::Opt<T, rfl::cli::attr::Group<G>, rfl::cli::attr::ValueName<VN>, rfl::cli::attr::Desc<Desc>>;
 
 template <rfl::internal::StringLiteral Desc>
 using OutCompFlag = GroupFlag<"Output Components", Desc>;
@@ -129,7 +129,8 @@ struct GeneralInfoArgs
 	GroupFlag<"General Information", "Show help message and exit."> help = false;
 	GroupFlag<"General Information", "Show version and exit."> version = false;
 	GroupFlag<"General Information", "Show licensing information and exit."> license = false;
-	rfl::Positional<rfl::Group<"General Information", rfl::ValueName<"arg", rfl::Description<"input file", OptStrVec>>>> input_file;
+	rfl::cli::Opt<OptStrVec, rfl::cli::attr::Positional, rfl::cli::attr::Group<"General Information">,
+		rfl::cli::attr::ValueName<"arg">, rfl::cli::attr::Desc<"input file">> input_file;
 };
 
 struct InputArgs
@@ -153,8 +154,9 @@ struct InputArgs
 
 struct OutputArgs
 {
-	rfl::Short<"o", GroupOpt<"Output Options", "path",
-		"If given, creates one file per output component and contract/file at the specified directory.">> output_dir;
+	rfl::cli::Opt<OptStr, rfl::cli::attr::Short<"o">, rfl::cli::attr::Group<"Output Options">,
+		rfl::cli::attr::ValueName<"path">,
+		rfl::cli::attr::Desc<"If given, creates one file per output component and contract/file at the specified directory.">> output_dir;
 	GroupFlag<"Output Options", "Overwrite existing files (used together with -o)."> overwrite = false;
 	GroupOpt<"Output Options", "version", "Select desired EVM version."> evm_version;
 	GroupFlag<"Output Options", "Deprecated synonym of --via-ir."> experimental_via_ir = false;
@@ -340,27 +342,6 @@ struct CommandLineParser::RawArgs
 	rfl::Flatten<ExperimentalArgs> experimental;
 	rfl::Flatten<DisabledArgs> disabled;
 };
-
-std::set<std::string> CommandLineParser::collectProvidedOptions(RawArgs const& _raw)
-{
-	std::set<std::string> provided;
-	auto const view = rfl::SnakeCaseToKebabCase::process<RawArgs>(rfl::to_view(_raw));
-	view.apply([&](auto const& _field) {
-		auto const& unwrapped = rfl::unwrap(*_field.value());
-		using Val = std::remove_cvref_t<decltype(unwrapped)>;
-		if constexpr (std::is_same_v<Val, bool>)
-		{
-			if (unwrapped)
-				provided.emplace(_field.name());
-		}
-		else
-		{
-			if (unwrapped.has_value())
-				provided.emplace(_field.name());
-		}
-	});
-	return provided;
-}
 
 CommandLineParser::CommandLineParser() = default;
 CommandLineParser::~CommandLineParser() = default;
@@ -778,12 +759,12 @@ void CommandLineParser::parseArgs(int _argc, char const* const* _argv)
 	m_options = {};
 	m_providedOptions.clear();
 
-	auto parsed = rfl::cli::read<RawArgs, SolcCli>(_argc, _argv);
+	auto parsed = rfl::cli::read_detailed<RawArgs, SolcCli>(_argc, _argv);
 	if (!parsed)
 		solThrow(CommandLineValidationError, parsed.error().what());
 
-	m_rawArgs = std::make_unique<RawArgs>(std::move(*parsed));
-	m_providedOptions = collectProvidedOptions(*m_rawArgs);
+	m_rawArgs = std::make_unique<RawArgs>(std::move(parsed->value));
+	m_providedOptions.insert(parsed->provided.begin(), parsed->provided.end());
 }
 
 void CommandLineParser::processArgs()
